@@ -1,0 +1,16 @@
+# What this checkout last synced into Recto (tools/sync-recto.mjs) — local
+.recto-sync.json
+
+# Claude Code's local settings and launch configuration, as in Recto
+.claude/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

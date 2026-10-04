@@ -1,0 +1,2 @@
+# The sync compares bytes with Recto's copies: text is LF on every platform.
+* text=auto eol=lf

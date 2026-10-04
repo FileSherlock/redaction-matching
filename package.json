@@ -1,0 +1,14 @@
+{
+  "name": "redaction-matching",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Recto's redaction_matching plugin — candidate names against redaction bars, by width in the bar's own face — developed on its own and synced into Recto.",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "serve": "node tools/serve.mjs",
+    "smoke": "node tools/smoke.mjs",
+    "sync:recto": "node tools/sync-recto.mjs",
+    "sync:recto:check": "node tools/sync-recto.mjs --check"
+  }
+}

@@ -1,0 +1,49 @@
+      <!-- The name-matching panel (redaction_matching): the selected bar's
+           fits, a name field, and the bar's format, letter filter and the
+           name lists. api.js fills the parts with ids and wires the toolbar
+           toggle; the host keeps its id, which text_tool reads to keep a bar
+           selected while the panel is clicked. Open by default (the toolbar
+           button carries `active`). -->
+      <aside id="tools-sidebar" class="rm-panel" aria-label="Name matching">
+        <div class="rm-resize" title="Drag to resize · double-click for the default size"></div>
+        <header class="rm-head">
+          <h2 class="rm-title"><span class="material-symbols-outlined" aria-hidden="true">person_search</span>Name matching</h2>
+          <button type="button" class="rm-icon-btn" data-act="close" title="Hide the panel" aria-label="Hide the panel">
+            <span class="material-symbols-outlined" aria-hidden="true">close</span></button>
+        </header>
+
+        <div class="rm-body">
+          <section id="rm-bar" class="rm-bar" aria-live="polite"></section>
+
+          <div class="rm-name-row">
+            <textarea id="name-input" class="rm-input" rows="1" spellcheck="false" autocomplete="off"
+              placeholder="Add a name" aria-label="Try or add a name"
+              title="Measured against the selected bar as you type. Enter adds it to Your names; several names go one per line or comma-separated."></textarea>
+            <button type="button" class="rm-btn" data-act="add-names">Add</button>
+          </div>
+          <div id="rm-try" class="rm-try" aria-live="polite"></div>
+
+          <details class="rm-sec" id="rm-format-sec">
+            <summary class="rm-sum"><span class="rm-sum-title">Format</span><span id="rm-format-sum" class="rm-sum-note"></span></summary>
+            <div id="rm-format" class="rm-sec-body"></div>
+          </details>
+
+          <details class="rm-sec" id="rm-filter-sec">
+            <summary class="rm-sum"><span class="rm-sum-title">Filter</span><span id="rm-filter-sum" class="rm-sum-note"></span></summary>
+            <div class="rm-sec-body">
+              <div class="rm-filter">
+                <label>Starts with
+                  <input type="text" id="ns-starts-with" class="rm-input" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Sa"></label>
+                <label>Ends with
+                  <input type="text" id="ns-ends-with" class="rm-input" maxlength="24" autocomplete="off" spellcheck="false" placeholder="llen"></label>
+              </div>
+              <p class="rm-hint">One or more letters of the name as the bar writes it. Letters a refiner sees sticking out of the bar fill these in (seen).</p>
+            </div>
+          </details>
+
+          <details class="rm-sec" id="rm-names-sec">
+            <summary class="rm-sum"><span class="rm-sum-title">Names</span><span id="rm-names-sum" class="rm-sum-note"></span></summary>
+            <div id="rm-names" class="rm-sec-body"></div>
+          </details>
+        </div>
+      </aside>

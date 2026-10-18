@@ -2,9 +2,11 @@
            fits, a name field, and the bar's format, letter filter and the
            name lists. api.js fills the parts with ids and wires the toolbar
            toggle; the host keeps its id, which text_tool reads to keep a bar
-           selected while the panel is clicked. Open by default (the toolbar
-           button carries `active`). -->
-      <aside id="tools-sidebar" class="rm-panel" aria-label="Name matching">
+           selected while the panel is clicked. Open the first time (the
+           toolbar button carries `active`), then as it was left.
+           data-side-panel: it shares the right side with the host's other
+           side panels, one at a time ('sidepanel:shown' on the bus). -->
+      <aside id="tools-sidebar" class="rm-panel" aria-label="Name matching" data-side-panel>
         <div class="rm-resize" title="Drag to resize · double-click for the default size"></div>
         <header class="rm-head">
           <h2 class="rm-title"><span class="material-symbols-outlined" aria-hidden="true">person_search</span>Name matching</h2>

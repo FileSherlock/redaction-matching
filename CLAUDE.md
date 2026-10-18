@@ -71,9 +71,14 @@ fields to both at load; it reads `state.currentPage`, `els.viewerContainer`), `G
 - `shaping.js`: `Shaping.widths({ strings, family, bold, italic, size, scale, kerning,
   ligatures, space_width })` → `{ results: [{ width }] }` — HarfBuzz, image px. Never measure
   with the browser (`getBBox`).
-- Controls it reads by id: `#tolerance`, `#tt-name-case` (Settings panel — its letter case
-  applies on top of a bar's format), `#kerning`,
-  `#fabric-font-family`, `#fabric-font-size` (formatting bar).
+- Controls it reads by id, all in text_tool's Text panel: `#tolerance`, `#tt-name-case`
+  (its Redaction match section — the letter case applies on top of a bar's format),
+  `#kerning` (Pair kerning, a checkbox: the selection's kerning as drawn),
+  `#fabric-font-family`, `#fabric-font-size` (the font and size; with nothing selected,
+  what new text takes).
+- The right side is shared one side panel at a time: the panel emits
+  `PDFHooks.emit('sidepanel:shown', { id })` when shown and hides on another panel's
+  (`rmSetPanelOpen`); `data-side-panel` on `#tools-sidebar` marks it for the host.
 
 **Box fields.** Reads `type` (`'redaction'`; `'embedded'` spans give a line's
 `baseCharPositions` `{ c, w }`), `page`, `x y w h` (image px, 96 DPI), `lineId`, `fontFamily`,

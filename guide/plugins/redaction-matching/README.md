@@ -95,7 +95,7 @@ name's case (as written, UPPERCASE, lowercase) and form (full, initial,
 initial with a full stop, left out), and a title or suffix; *Type a pattern*
 takes any pattern, for whatever the controls do not make.
 
-**Letter case** in Recto's Settings (text_tool's `box.uppercase`, per bar)
+**Letter case** in Recto's Text panel (its Redaction match section; text_tool's `box.uppercase`, per bar)
 applies *on top of* the format — leave it at *As typed* and the format
 decides; the panel shows a chip while it is set (`embedded_text_viewer` sets
 it to capitals when the bar's line writes its other names that way). The
@@ -143,7 +143,7 @@ memos; they differ where a document was set in another build of the face
 A name fits when its measured width lies within the bar's **fit range**:
 
 - **Over** (wider than the bar): the tolerance in force. That is the *Width
-  tolerance* in Recto's Settings, unless a refiner has marked the bar
+  tolerance* in Recto's Text panel (Redaction match), unless a refiner has marked the bar
   **pen-exact** — both edges derived from the reader's ¼-px OCR pens
   (`box.refineInfo.exact`, and the bar not moved since) — in which case it is
   `±0.3 px`, two ⅛-px lattice snaps; a tighter field still wins. The bar's
@@ -233,7 +233,7 @@ because no person's last name is 22 px wide.)
 The *Name matching* panel, top to bottom:
 
 - **The selected bar** — its width (the tooltip names the face it was measured
-  in), the tolerance chip, a letter-case chip while Settings → Letter case is
+  in), the tolerance chip, a letter-case chip while the Text panel's Letter case is
   set, then the names that fit, best first: verdict, the name as the bar
   writes it (in the bar's face), its offset against the bar in px, a pin on
   the pinned one, and the hide button. Twelve show, then *Show all*; near
@@ -249,8 +249,17 @@ The *Name matching* panel, top to bottom:
 
 The panel is as wide as its left edge is dragged (double-click for the
 default); on a screen under 769 px it is a sheet docked at the bottom, as tall
-as its top edge is dragged, with a close button. Nothing is kept across
-reloads.
+as its top edge is dragged, with a close button.
+
+It shares the right side with the host's other side panels — Recto's Text
+panel, another plugin's — **one at a time**: shown, it emits `sidepanel:shown`
+`{ id }` on the bus and hides when another panel's arrives (the host's
+convention; `data-side-panel` marks the panels), so its tool (`#toggle-tools`)
+switches the right side to it and the Text panel's ¶ tool switches it away.
+Whether it is shown is kept in this browser (localStorage
+`recto.nameMatching.open`), applied at load — before a later plugin's panel
+decides whether to show itself; the first time it is shown. Its size is not
+kept.
 
 ## How it attaches
 

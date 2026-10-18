@@ -80,7 +80,7 @@ Object.assign(state, {
 });
 
 Object.assign(els, {
-  // text_tool's matching controls in the Settings panel (absent without text_tool)
+  // text_tool's matching controls, in its Text panel (absent without text_tool)
   tol:   document.getElementById('tolerance'),
   kern:  document.getElementById('kerning'),
   upper: document.getElementById('tt-name-case'),   // '' | 'all' | 'first' | 'last' (text_tool's utbCaseMode)
@@ -97,7 +97,7 @@ const rmUi = {
 
 // ── Helpers ─────────────────────────────────────────────────
 
-// A name as the bar writes it: Settings → Letter case (box.uppercase: false,
+// A name as the bar writes it: the Text panel's Letter case (box.uppercase: false,
 // true, 'first' or 'last' — text_tool's utbApplyCase) on top of the format's
 // own case. Left at "As typed", the format decides.
 const caseName = (box, s) => (typeof utbApplyCase === 'function' ? utbApplyCase(String(s), box?.uppercase)
@@ -1571,10 +1571,34 @@ function rmRenderNames() {
 
 // ── The panel: wiring ───────────────────────────────────────
 
-function rmSetPanelOpen(open) {
-  els.namesPanel?.classList.toggle('hidden', !open);
+// The right side is shared with the host's other side panels (Recto's Text
+// panel, another plugin's), one at a time: a panel shown says so on the bus
+// ('sidepanel:shown', { id }) and every other one hides — so this panel's tool
+// switches to it from whichever panel was showing, and that panel's tool back.
+// Whether it is shown is kept in this browser; the first time, it is.
+const RM_PANEL_KEY = 'recto.nameMatching.open';
+function rmSetPanelOpen(open, { announce = true } = {}) {
+  const panel = els.namesPanel;
+  if (!panel) return;
+  panel.classList.toggle('hidden', !open);
   document.getElementById('toggle-tools')?.classList.toggle('active', open);
+  try { localStorage.setItem(RM_PANEL_KEY, open ? '1' : '0'); } catch { /* this session only */ }
+  if (open && announce) window.PDFHooks?.emit('sidepanel:shown', { id: panel.id });
 }
+window.PDFHooks?.on('sidepanel:shown', ({ id } = {}) => {
+  const panel = els.namesPanel;
+  if (panel && id !== panel.id && !panel.classList.contains('hidden')) rmSetPanelOpen(false, { announce: false });
+});
+// As the user left it — at load, so a panel of a later plugin sees whether
+// this one is showing when it decides whether to show itself.
+(function rmRestorePanel() {
+  let kept = null;
+  try { kept = localStorage.getItem(RM_PANEL_KEY); } catch { /* the default: shown */ }
+  if (kept === '0') {
+    els.namesPanel?.classList.add('hidden');
+    document.getElementById('toggle-tools')?.classList.remove('active');
+  }
+})();
 
 function rmAddTypedNames() {
   const input = els.nameInput;
@@ -1741,7 +1765,8 @@ function rmWireResize(panel) {
 function rmWirePanel() {
   const panel = els.namesPanel;
   const toggle = document.getElementById('toggle-tools');
-  // The panel starts open (its toolbar button carries `active`).
+  // The panel starts open the first time (its toolbar button carries `active`),
+  // then as it was left (rmRestorePanel); its tool shows or hides it.
   toggle?.addEventListener('click', () => rmSetPanelOpen(!!panel?.classList.contains('hidden')));
   if (!panel) return;
   panel.addEventListener('click', rmOnClick);

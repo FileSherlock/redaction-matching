@@ -27,8 +27,8 @@ the whole document's:
 
 | List | File | On at start |
 | --- | --- | --- |
-| People | `names.json` — 1,834 people, with their aliases, titles, suffixes, nicknames, and a middle initial, gender and e-mail addresses where known | yes |
-| Businesses | `contacts-businesses.json` — the businesses of the contacts book | no |
+| People | `names.json` — 2,439 people, with their aliases, titles, suffixes, nicknames, and a middle initial, gender, e-mail addresses and links where known | yes |
+| Businesses | `contacts-businesses.json` — the businesses of the contacts book, with a note and their page | no |
 | Your names | typed or pasted into the panel | yes |
 
 A shipped list is a JSON array in the plugin's folder, fetched through
@@ -38,8 +38,9 @@ which every format writes as it stands (an e-mail address list is a file of
 strings and a line in `NAME_LISTS`):
 
 ```json
-{ "first": ["Jeffrey", "Jeffrey E."], "middle": "E", "last": ["Epstein"], "prefix": null,
-  "nickname": null, "suffix": null, "gender": null, "email": [] }
+{ "first": ["Edward", "Jay"], "middle": null, "last": ["Epstein"], "prefix": null,
+  "nickname": null, "suffix": null, "gender": null, "email": [],
+  "links": { "adress-book": "p17", "wiki": "EdwardEpstein" } }
 ```
 
 - `first`, `last` — a person's first spelling is their own, the others are
@@ -49,20 +50,30 @@ strings and a line in `NAME_LISTS`):
 - `gender` — `"f"` or `"m"` (`female` / `woman`, `male` / `man` read the
   same); any other value counts as *not recorded*, as null does.
 - `email` — the person's addresses.
-- `note` — for the panel's tooltip. An entry whose note says it is a
-  *section heading* (BRAZIL, MEDICAL — the contacts book's headings) is not a
-  name and is skipped.
+- `note` — shown in the ℹ card (a business's address, number or contact). An
+  entry whose note says it is a *section heading* (BRAZIL, MEDICAL — the
+  contacts book's headings) is not a name and is skipped.
+- `links` — where the entry was read and where to read more, shown in the ℹ
+  card. `"adress-book": "p17"` (spelled so in the lists) is the page of the
+  address book. `"wiki"` marks a section of Wikipedia's
+  [List of people named in the Epstein files](https://en.wikipedia.org/wiki/List_of_people_named_in_the_Epstein_files):
+  its anchor is the value, or the entry's first last name when the value is
+  empty (`"wiki": ""` on Dershowitz → `#Dershowitz`; `"EdwardEpstein"`,
+  `"Mountbatten-Windsor"`, `"Bill_Gates"` where the section's anchor is not the
+  last name). Any other key shows its value: an http(s) address as a link,
+  anything else as text.
 
 Every field but `first` and `last` may be missing, null or empty. In
 `names.json` they are filled only where the list itself says so: a **gender**
 from a title that gives one (Mr, Ms, Mrs, Miss, Sir, Lady, Lord, Prince,
 Princess, Duke, Duchess, Earl, Baron, Baroness, Viscount, Viscountess,
-Marquess, Sheikh, Sultan, Señor) on an entry of one person — 68 of them; an
+Marquess, Sheikh, Sultan, Señor) on an entry of one person — 91 of them; an
 entry for a couple (*Sir* over "Anthony" and "Carole" Bamford) is left
 without one — and a **middle initial** where a spelling of the first name
-writes it beside the plain one ("Jeffrey" and "Jeffrey E.": 21). No entry has
-an e-mail address yet. The Names section says, per list, how many entries
-record each.
+writes it beside the plain one ("Jeffrey" and "Jeffrey E.": 23). 412 entries
+have e-mail addresses, 1,880 their address-book page and 169 a Wikipedia
+section; every business has its page. The Names section says, per list, how
+many entries record a gender, a middle name, an e-mail address.
 
 Your names come one per line or comma-separated (a comma is always a
 separator). A typed name is a person: its last word is the last name and the
@@ -327,9 +338,10 @@ The *Name matching* panel, top to bottom:
 - **The selected bar** — its width (the tooltip names the face it was measured
   in), the tolerance chip, a letter-case chip while the Text panel's Letter case is
   set, then the names that fit, best first: verdict, the name as the bar
-  writes it (in the bar's face), its offset against the bar in px, a pin on
-  the pinned one, and the hide button. Twelve show, then *Show all*; near
-  misses fold away. With no bar selected it says to select one.
+  writes it (in the bar's face) with an ℹ behind it, its offset against the
+  bar in px, a pin on the pinned one, and the hide button. Twelve show, then
+  *Show all*; near misses fold away. With no bar selected it says to select
+  one.
 - **The name field** — measures what is typed against the selected bar as you
   type (`140.92 px −0.81 too narrow`); Enter (or *Add*) adds it to Your names,
   Shift+Enter starts another line, and a pasted list adds every name.
@@ -341,6 +353,21 @@ The *Name matching* panel, top to bottom:
 - **Names** (collapsed; its summary says which lists are on and how many
   entries) — the lists' switches and counts (under a list of people, how many
   record a gender, a middle name, an e-mail address), Your names, the hidden.
+
+**The ℹ card.** The ℹ behind a fitting name (or a near miss) says who the
+name is: every entry that writes it (three, then how many more; a pair
+reading's one person), as its list records it — the full name (title, first,
+middle, last, suffix), its other spellings and nickname, *Woman* or *Man*
+where the list records a gender, the list, its e-mail addresses, its note,
+its address-book page and a link to its Wikipedia section (a new tab).
+Hovering the ℹ opens the card, which stays while the pointer is on it so its
+links can be followed. A click on the ℹ (a tap, Enter) pins it until Escape,
+a click elsewhere or another click on the ℹ; from the keyboard the focus moves
+into it, and Escape gives it back to the ℹ. The card hangs in the panel
+(`#rm-info-card`, outside the scrolling body), under its ℹ or — with more room
+there — above it, follows its name when the list is drawn again and closes
+when the name is gone, the body scrolls it out of view, or the panel hides.
+The rest of the row keeps its tooltip (width, verdict, list).
 
 The panel is as wide as its left edge is dragged (double-click for the
 default); on a screen under 769 px it is a sheet docked at the bottom, as tall
@@ -383,7 +410,8 @@ kept.
   `shownMatch`, `setBoxMatch`, `cycleBoxMatch`, `matchesLetterFilter`,
   `matchesGenderFilter`, `parseNamePattern` (→ `{ tree, variants, error }`),
   `nameFromPattern` (one variant), `namesOfPattern` (all of them),
-  `patternOfNameTree`, `makeNames`, `setNameList`.
+  `patternOfNameTree`, `makeNames`, `setNameList`, and what the ℹ card says
+  of an entry: `nameEntryFull`, `nameEntryAlso`, `nameEntryLinks`.
 
 ## Tests
 
@@ -405,8 +433,11 @@ kept.
   escapes and errors, the pills writing a pattern back as it was, what each
   pill action does to the tree, the default format against the old *Full
   name* on `names.json`), the lists (entries' new fields, a middle name not
-  written twice, `names.json` filled only where it says so) and the gender
-  filter.
+  written twice, `names.json` filled only where it says so, every
+  address-book link a page and every Wikipedia link a section of the list),
+  the gender filter, and the ℹ card (an entry's full name, other spellings
+  and links, every entry behind a name, a pair's one person, a list's text
+  never markup).
 
 ## Dependencies
 

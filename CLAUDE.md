@@ -33,12 +33,14 @@ node tests/plugins/redaction_matching/matching.test.mjs   # the matcher suite al
   page test holds the script list to its recording, so no second script),
   `styles.css` (scoped to the panel), `toolbar_button.html` (`#toggle-tools`),
   `sidebar_tools.html` (`#tools-sidebar`, the *Name matching* panel: the selected bar's
-  fits, the name field, and collapsed Format (the pill editor) / Filter / Names sections —
-  api.js fills them), and the name lists, declared in `api.js`'s `NAME_LISTS`: `names.json`
-  (People, ~260 KB of `{ first: [...], middle, last: [...], prefix, nickname, suffix,
-  gender, email: [...] }`, the new fields null or empty where the list does not say) and
-  `contacts-businesses.json` (Businesses, `last`-only entries with a `note`; off by
-  default). Grep them, never read them whole.
+  fits, each with an ℹ whose card (`#rm-info-card`) says who the name is, the name field,
+  and collapsed Format (the pill editor) / Filter / Names sections — api.js fills them),
+  and the name lists, declared in `api.js`'s `NAME_LISTS`: `names.json` (People, ~430 KB
+  of `{ first: [...], middle, last: [...], prefix, nickname, suffix, gender, email: [...],
+  links: { "adress-book": "p64", wiki } }`, the fields null or empty where the list does
+  not say; `adress-book` is spelled so) and `contacts-businesses.json` (Businesses,
+  `last`-only entries with a `note` and `links`; off by default). Grep them, never read
+  them whole.
 - `tests/plugins/redaction_matching/` — `matching.test.mjs` runs `api.js` under Node with the
   host's globals stubbed; `page.test.mjs` checks the generated page (imports
   `tools/build.mjs`, which here is Recto's build with this plugin overlaid).

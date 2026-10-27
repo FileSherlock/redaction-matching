@@ -3,7 +3,8 @@
 // refiner can vouch for), the loose fallback, how page-pixel verdicts from an
 // optional hypothesis tester rank the list, two bars read as one name, the
 // formats (their parts, optional groups and choices, and what the pill
-// editor does to them) and the lists and filters the names come from. Run directly
+// editor does to them), the lists and filters the names come from, and what
+// the ℹ card says of the entries behind a name. Run directly
 // (`node tests/plugins/redaction_matching/matching.test.mjs`) or with the
 // whole suite (`node --test "tests/**/*.test.mjs"`).
 import fs from 'node:fs';
@@ -564,6 +565,60 @@ test('names.json: every person has the new fields, filled only where the list sa
   assert.equal(people.find(p => p.last[0] === 'Bamford').gender, null, 'Sir Anthony and Carole Bamford are two people');
   // a middle initial where a spelling of the first name writes it
   for (const p of people.filter(x => x.middle)) assert.ok(p.first.includes(`${p.first[0]} ${p.middle}.`), `${p.first[0]} ${p.last[0]}`);
+});
+
+test('the ℹ card: an entry\'s full name, its other spellings, its links', () => {
+  const jeffrey = nameEntry({ first: ['Jeffrey', 'Jeffrey E.'], middle: 'E', last: ['Epstein'], links: { 'adress-book': 'p64' } });
+  assert.equal(nameEntryFull(jeffrey), 'Jeffrey E. Epstein');
+  assert.deepEqual(nameEntryAlso(jeffrey), [], '"Jeffrey E. Epstein" is the full name already');
+  assert.equal(nameEntryFull(nameEntry({ first: ['Abdul'], last: ['Alianizi'], prefix: 'Dr' })), 'Dr Abdul Alianizi');
+  assert.equal(nameEntryFull(nameEntry({ first: [], last: ['Aspen Club'] })), 'Aspen Club');
+  assert.deepEqual(nameEntryAlso(nameEntry({ first: ['David'], last: ['Howell', 'Evans'], nickname: 'The Edge' })), ['David Evans', '“The Edge”']);
+  assert.deepEqual(nameEntryAlso(nameEntry({ first: ['Elizabeth', 'Libit'], last: ['Johnson'], nickname: 'Libit' })), ['Libit Johnson'], 'a nickname that is a spelling already');
+  assert.deepEqual(nameEntryLinks(jeffrey), [{ kind: 'book', text: 'Address book, page 64' }]);
+  // Wikipedia: the link's fragment, or the last name when it is empty; an anchor has no spaces
+  const wiki = (last, fragment) => nameEntryLinks(nameEntry({ first: ['A'], last: [last], links: { wiki: fragment } }))[0].href;
+  assert.equal(wiki('Dubin', ''), `${NAME_WIKI_LIST}#Dubin`);
+  assert.equal(wiki('Andersson', 'Andersson-Dubin'), `${NAME_WIKI_LIST}#Andersson-Dubin`);
+  assert.equal(wiki('Perry Lang', ''), `${NAME_WIKI_LIST}#Perry_Lang`);
+  // another key: an http(s) address is a link, anything else text — never a script
+  assert.deepEqual(nameEntryLinks(nameEntry({ last: ['X'], links: { site: 'https://example.org/x', bad: 'javascript:alert(1)', 'adress-book': '' } })),
+    [{ kind: 'web', text: 'site', href: 'https://example.org/x' }, { kind: 'text', text: 'bad: javascript:alert(1)' }]);
+  assert.deepEqual(nameEntry({ last: ['X'], links: ['p1'] }).links, {}, 'links are an object or nothing');
+});
+
+test('the ℹ card shows each entry that writes a name, a pair\'s one, and what a list holds as text', () => {
+  useNames([
+    person(['Abraham', 'Abe'], 'Gosman', { links: { 'adress-book': 'p15' } }),
+    person('Abe', 'Gosman', { prefix: 'Mr', gender: 'm', email: ['abe@<b>.org'], links: { 'adress-book': 'p70', wiki: '' } }),
+  ]);
+  const box = bar({ widths: { 'Abe Gosman': 120.5 } });
+  const abe = getBoxMatchInfo(box).entries.find(e => e.name === 'Abe Gosman');
+  assert.deepEqual(rmInfoEntries(box, abe).map(x => nameEntryFull(x.entry)), ['Abraham Gosman', 'Mr Abe Gosman']);
+  const html = rmInfoHtml(box, abe);
+  for (const s of ['Abraham Gosman', 'also Abe Gosman', 'Mr Abe Gosman', '>Man<', '>People<', 'abe@&lt;b&gt;.org',
+                   'Address book, page 15', 'Address book, page 70', `href="${NAME_WIKI_LIST}#Gosman" target="_blank" rel="noopener noreferrer"`]) {
+    assert.ok(html.includes(s), s);
+  }
+  assert.ok(!html.includes('<b>'), 'a list\'s text is never markup');
+  // more than three entries: the rest are counted
+  useNames(Array.from({ length: 5 }, () => person('Abe', 'Gosman')));
+  assert.match(rmInfoHtml(box, abe), /and 2 more entries write this name/);
+  // a pair reading: the one person whose halves fit the two bars
+  const { A } = pairFixture('row');
+  const pair = getBoxMatchInfo(A).entries[0];
+  assert.deepEqual(rmInfoEntries(A, pair).map(x => nameEntryFull(x.entry)), ['Nadia Marcinkova']);
+  assert.match(rmInfoHtml(A, pair), /also Nada Marcinkova/);
+});
+
+test('the lists\' links: an address-book page is a page, a Wikipedia link a section of the list', () => {
+  const read = f => JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')).map(nameEntry).filter(Boolean);
+  const links = [...read('names.json'), ...read('contacts-businesses.json')].flatMap(nameEntryLinks);
+  assert.ok(links.some(l => l.kind === 'book') && links.some(l => l.kind === 'wiki'));
+  for (const l of links) {
+    if (l.kind === 'book') assert.match(l.text, /^Address book, page \d+$/);
+    if (l.kind === 'wiki') assert.match(l.href, /^https:\/\/en\.wikipedia\.org\/wiki\/List_of_people_named_in_the_Epstein_files#[^#\s]+$/);
+  }
 });
 
 test('two bars: the halves of a middle initial, a choice of parts; a pair needs both bars\' gender filters', () => {

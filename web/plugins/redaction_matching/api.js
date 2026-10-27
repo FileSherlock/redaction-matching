@@ -19,11 +19,12 @@
 //
 // A shipped list is a JSON file in this folder, fetched through assetURL (its
 // URL carries the file's hash). It holds entries { first: [...], middle,
-// last: [...], prefix, suffix, nickname, gender, email: [...], note } —
-// names.json's shape: a person's first spelling is their own, the others are
-// aliases; `middle` is a middle name or initial, `gender` 'f' or 'm',
-// `email` their addresses, each null or empty where the list does not know
-// it — or plain strings, which every format writes as they stand (an e-mail
+// last: [...], prefix, suffix, nickname, gender, email: [...], note, links }
+// — names.json's shape: a person's first spelling is their own, the others
+// are aliases; `middle` is a middle name or initial, `gender` 'f' or 'm',
+// `email` their addresses, `links` where the entry was read and where to read
+// more (nameEntryLinks), each null or empty where the list does not know it
+// — or plain strings, which every format writes as they stand (an e-mail
 // address). Adding a list is a file and a line here; `on` is whether bars
 // are matched against it from the start. The lists are the whole document's;
 // Your names are typed or pasted.
@@ -121,10 +122,13 @@ Object.assign(els, {
 });
 
 // The panel's own state: what is open, what is being measured or typed.
-// `pill` is the path ("2.1") of the pill whose controls are open.
+// `pill` is the path ("2.1") of the pill whose controls are open; `info` the
+// ℹ card's: the fitting name it is about (its key), the ℹ it hangs from,
+// whether a click pinned it, and what it shows.
 const rmUi = {
   openFormat: null, pill: null, patternOpen: false, nearOpen: false, allFits: false,
   measuring: new Set(), trySeq: 0, timers: {}, dragged: false,
+  info: { key: null, anchor: null, pinned: false, html: '' },
 };
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -599,8 +603,19 @@ function nameEntry(raw) {
     first: spellings(raw.first), middle: spellings(raw.middle), last: spellings(raw.last),
     prefix: raw.prefix || null, suffix: raw.suffix || null, nickname: raw.nickname || null,
     email: spellings(raw.email), gender: nameGender(raw.gender), note: raw.note || '',
+    links: nameLinks(raw.links),
   };
   return e.first.length || e.last.length || e.nickname || e.email.length ? e : null;
+}
+
+// An entry's links as its file has them, string values only:
+// { "adress-book": "p75" } (sic) is the page of the address book it was read
+// from, { "wiki": "" } its section of Wikipedia's list (nameEntryLinks).
+function nameLinks(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string' || typeof v === 'number') out[k] = String(v).trim();
+  return out;
 }
 
 // A recorded gender: 'f' (f, female, w, woman), 'm' (m, male, man), 'x'
@@ -621,8 +636,63 @@ function typedNameEntry(s) {
   const m = /^(.+) (\S+)$/.exec(t);
   return {
     first: m ? [m[1]] : [], middle: [], last: [m ? m[2] : t], prefix: null, suffix: null, nickname: null,
-    email: [], gender: null, note: '',
+    email: [], gender: null, note: '', links: {},
   };
+}
+
+// ── Name lists: what an entry says about its person ─────────
+// The ℹ card beside a fitting name shows these (rmInfoHtml).
+
+// Wikipedia's list: an entry with a `wiki` link has a section there, its id
+// the link's fragment or, when that is empty, the entry's last name.
+const NAME_WIKI_LIST = 'https://en.wikipedia.org/wiki/List_of_people_named_in_the_Epstein_files';
+
+/** An entry's name as its list records it — title, first, middle, last,
+ *  suffix ("Dr Abdul Alianizi", "Jeffrey E. Epstein"); a plain string as it
+ *  stands. */
+function nameEntryFull(e) {
+  if (!e) return '';
+  if (e.text != null) return e.text;
+  const first = e.first?.[0] || '';
+  const middle = e.middle?.[0] && !writesMiddle(first, e.middle[0]) ? e.middle[0] : '';
+  return [e.prefix, first, middle.length === 1 ? `${middle}.` : middle, e.last?.[0], e.suffix]
+    .filter(Boolean).join(' ') || e.nickname || e.email?.[0] || '';
+}
+
+/** The entry's other spellings — each other first name with its last name,
+ *  the first name with each other last name — then its nickname, quoted. */
+function nameEntryAlso(e) {
+  if (!e || e.text != null) return [];
+  const first = e.first?.[0] || '', last = e.last?.[0] || '';
+  const same = new Set([nameEntryFull(e), [first, last].filter(Boolean).join(' ')]);
+  const out = [
+    ...(e.first || []).slice(1).map(f => [f, last].filter(Boolean).join(' ')),
+    ...(e.last || []).slice(1).map(l => [first, l].filter(Boolean).join(' ')),
+  ].filter(s => !same.has(s));
+  if (e.nickname && !e.first?.includes(e.nickname)) out.push(`“${e.nickname}”`);
+  return [...new Set(out)];
+}
+
+/** An entry's links to show: { kind, text, href? } — the address-book page,
+ *  the Wikipedia section, and any other link key: an http(s) address as a
+ *  link, anything else as text. */
+function nameEntryLinks(e) {
+  const out = [];
+  for (const [key, v] of Object.entries(e?.links || {})) {
+    if (key === 'adress-book' || key === 'address-book') {
+      if (!v) continue;
+      const page = /^(?:p\.?\s*)?(\d+)$/i.exec(v)?.[1];
+      out.push({ kind: 'book', text: page ? `Address book, page ${page}` : `Address book, ${v}` });
+    } else if (key === 'wiki') {
+      const fragment = (v || e.last?.[0] || '').trim().replace(/\s+/g, '_');
+      out.push({ kind: 'wiki', text: 'Wikipedia: named in the Epstein files', href: fragment ? `${NAME_WIKI_LIST}#${encodeURIComponent(fragment)}` : NAME_WIKI_LIST });
+    } else if (/^https?:\/\/\S+$/i.test(v)) {
+      out.push({ kind: 'web', text: key, href: v });
+    } else if (v) {
+      out.push({ kind: 'text', text: `${key}: ${v}` });
+    }
+  }
+  return out;
 }
 
 function nameList(id) {
@@ -1620,9 +1690,11 @@ function rmFitRow(box, e, { shown, pickable, tagged, loose }) {
   const origin = tagged ? rmOrigin(box, e) : null;
   const cls = ['rm-fit', shown && 'is-shown', pinned && 'is-pinned', v && `v-${v}`, e.kind === 'pair' && 'is-pair',
     e.near && 'is-near', pickable && 'is-pickable'].filter(Boolean).join(' ');
+  // the ℹ: an empty title keeps the row's tooltip off it — its card says more
+  const about = `<button type="button" class="rm-info" data-act="info" title="" aria-label="About ${escAttr(e.full)}" aria-controls="rm-info-card" aria-expanded="${rmUi.info.key === e.key}">${rmIcon('info')}</button>`;
   return `<li class="${cls}" data-key="${escAttr(e.key)}" title="${escAttr(rmFitTitle(box, e, loose))}">
       <span class="rm-mark">${v ? VERDICT_MARK[v] : ''}</span>
-      <span class="rm-fit-name" style="${rmFamily(box)}">${shownName}</span>
+      <span class="rm-fit-who"><span class="rm-fit-name" style="${rmFamily(box)}">${shownName}</span>${about}</span>
       <span class="rm-fit-meta">${origin?.list && origin.list.id !== 'people' ? `<span class="rm-tag">${escAttr(origin.list.label)}</span>` : ''}${pinned ? rmIcon('push_pin', 'rm-pin') : ''}<span class="rm-px">${w != null ? rmSigned(w - box.w) : ''}</span></span>
       <button type="button" class="rm-icon-btn rm-fit-hide" data-act="hide" title="Hide this name from every bar" aria-label="Hide ${escAttr(e.full)} from every bar">${rmIcon('visibility_off')}</button>
     </li>`;
@@ -1639,6 +1711,7 @@ function rmRenderBar() {
   if (els.nameInput) els.nameInput.placeholder = box ? 'Try or add a name' : 'Add a name';
   if (!box) {
     host.innerHTML = '<p class="rm-empty">Select a bar on the page to see the names that fit it.</p>';
+    rmHideInfo();
     return;
   }
   const { entries, near, tol, loose, link } = getBoxMatchInfo(box);
@@ -1679,6 +1752,7 @@ function rmRenderBar() {
       <ol class="rm-fits">${misses.map(e => rmFitRow(box, e, { shown: false, pickable: false, tagged: false, loose })).join('')}</ol>
     </details>` : '';
   host.innerHTML = `${head}${linkNote}${body}${nearHtml}`;
+  rmInfoReanchor();
 }
 
 // The name field measures what is typed against the selected bar.
@@ -1701,6 +1775,144 @@ async function rmRenderTry() {
     <span class="rm-px ${fits ? 'is-ok' : 'is-off'}">${rmSigned(d)}</span>
     <span class="${fits ? 'is-ok' : 'is-off'}">${fits ? 'fits' : d > 0 ? 'too wide' : 'too narrow'}</span>
     <span class="rm-try-hint">· Enter adds it</span>`;
+}
+
+// ── The panel: the ℹ card ───────────────────────────────────
+// The ℹ behind a fitting name opens a card on who it is: every entry that
+// writes the name (a pair's one), as its list records it — the full name,
+// other spellings, a gender, e-mail addresses, a note, the address-book page,
+// the Wikipedia section. Hovering the ℹ shows it, and it stays while the
+// pointer is on it, so its links can be followed; a click (a tap, Enter)
+// pins it until Escape or a click elsewhere, and from the keyboard the focus
+// goes into it. It hangs in the panel (#rm-info-card, outside the scrolling
+// body), under the ℹ or, with more room there, above it.
+
+const RM_INFO_ENTRIES = 3;
+const RM_INFO_OPEN_MS = 120;    // a pointer passing over an ℹ does not open it
+const RM_INFO_CLOSE_MS = 200;   // time to cross from the ℹ to the card
+const RM_LINK_ICONS = { book: 'menu_book', wiki: 'public', web: 'link', text: 'label' };
+
+// The entries behind a reading: a pair's one, or each that writes the name.
+function rmInfoEntries(box, e) {
+  const origins = e.kind === 'pair' ? [e.origin] : barNames(box).names.get(e.name) || [];
+  return origins.map(o => ({ list: nameList(o.list), entry: nameList(o.list)?.entries[o.index] }))
+    .filter(x => x.list && x.entry);
+}
+
+function rmInfoEntryHtml(list, x) {
+  const also = nameEntryAlso(x);
+  const tags = [x.gender === 'f' ? 'Woman' : x.gender === 'm' ? 'Man' : '', list.label].filter(Boolean);
+  const row = (icon, html) => `<li>${rmIcon(icon)}<span>${html}</span></li>`;
+  const rows = [
+    ...(x.email || []).map(a => row('mail', escAttr(a))),
+    x.note ? row('sticky_note_2', escAttr(x.note)) : '',
+    ...nameEntryLinks(x).map(l => row(RM_LINK_ICONS[l.kind], l.href
+      ? `<a href="${escAttr(l.href)}" target="_blank" rel="noopener noreferrer">${escAttr(l.text)}${rmIcon('open_in_new', 'rm-info-ext')}</a>`
+      : escAttr(l.text))),
+  ].join('');
+  return `<div class="rm-info-entry">
+      <div class="rm-info-name">${escAttr(nameEntryFull(x))}</div>
+      ${also.length ? `<div class="rm-info-also">also ${also.map(escAttr).join(' · ')}</div>` : ''}
+      <div class="rm-info-tags">${tags.map(t => `<span class="rm-info-tag">${escAttr(t)}</span>`).join('')}</div>
+      ${rows ? `<ul class="rm-info-rows">${rows}</ul>` : ''}
+    </div>`;
+}
+
+/** The ℹ card of one of a bar's readings. */
+function rmInfoHtml(box, e) {
+  const who = rmInfoEntries(box, e);
+  if (!who.length) return '<p class="rm-info-more">No list holds this name any more.</p>';
+  const more = who.length - RM_INFO_ENTRIES;
+  return `${who.slice(0, RM_INFO_ENTRIES).map(({ list, entry }) => rmInfoEntryHtml(list, entry)).join('')}
+    ${more > 0 ? `<p class="rm-info-more">and ${more} more ${more === 1 ? 'entry writes' : 'entries write'} this name</p>` : ''}`;
+}
+
+/** Open the card of the fitting name an ℹ belongs to — pinned or not, with
+ *  the focus moved into it or not. */
+function rmShowInfo(btn, { pin = false, focus = false } = {}) {
+  const card = document.getElementById('rm-info-card');
+  const box = getSelectedRedaction();
+  const key = btn?.closest('.rm-fit')?.dataset.key;
+  if (!card || !box || key == null) return;
+  const { entries, near } = getBoxMatchInfo(box);
+  const e = [...entries, ...near].find(x => x.key === key);
+  if (!e) { rmHideInfo(); return; }
+  const info = rmUi.info;
+  clearTimeout(rmUi.timers.info);
+  if (info.anchor !== btn) info.anchor?.setAttribute('aria-expanded', 'false');
+  Object.assign(info, { key, anchor: btn, pinned: pin });
+  btn.setAttribute('aria-expanded', 'true');
+  const html = rmInfoHtml(box, e);
+  if (html !== info.html) { card.innerHTML = html; info.html = html; }
+  card.classList.remove('hidden');
+  rmPlaceInfo();
+  if (focus) (card.querySelector('a') || card).focus();
+}
+
+function rmHideInfo() {
+  const info = rmUi.info;
+  clearTimeout(rmUi.timers.info);
+  if (info.key == null) return;
+  info.anchor?.setAttribute('aria-expanded', 'false');
+  Object.assign(info, { key: null, anchor: null, pinned: false, html: '' });
+  document.getElementById('rm-info-card')?.classList.add('hidden');
+}
+
+// Under the ℹ, or above it when there is more room there — within the panel
+// (desktop: positioned; the narrow-screen sheet: fixed), as wide as it allows.
+function rmPlaceInfo() {
+  const card = document.getElementById('rm-info-card');
+  const panel = els.namesPanel;
+  const btn = rmUi.info.anchor;
+  if (!card || !panel || !btn?.isConnected) { rmHideInfo(); return; }
+  const b = btn.getBoundingClientRect();
+  const view = panel.querySelector('.rm-body')?.getBoundingClientRect();
+  if (view && (b.bottom <= view.top || b.top >= view.bottom)) { rmHideInfo(); return; }   // scrolled away
+  const p = panel.getBoundingClientRect();
+  const ox = p.left + panel.clientLeft, oy = p.top + panel.clientTop;
+  const width = Math.min(300, panel.clientWidth - 16);
+  card.style.width = `${width}px`;
+  card.style.maxHeight = '';
+  const below = b.bottom - oy + 4;
+  const roomBelow = panel.clientHeight - 8 - below;
+  const roomAbove = b.top - oy - 4 - 8;
+  const h = card.offsetHeight;
+  const under = h <= roomBelow || roomBelow >= roomAbove;
+  const room = under ? roomBelow : roomAbove;
+  if (h > room) card.style.maxHeight = `${Math.max(80, room)}px`;
+  card.style.left = `${Math.round(Math.max(8, Math.min(b.left - ox - 12, panel.clientWidth - width - 8)))}px`;
+  card.style.top = `${Math.round(under ? below : b.top - oy - 4 - Math.min(h, room))}px`;
+}
+
+// The fits were drawn again (a measurement, a verdict, a pin): the card
+// follows its name to the new ℹ, or closes when the name is gone.
+function rmInfoReanchor() {
+  const info = rmUi.info;
+  if (info.key == null) return;
+  const row = [...document.querySelectorAll('#rm-bar .rm-fit')].find(li => li.dataset.key === info.key);
+  const btn = row?.querySelector('.rm-info');
+  if (btn) rmShowInfo(btn, { pin: info.pinned });
+  else rmHideInfo();
+}
+
+// A mouse over an ℹ opens its card after a moment (at once while another is
+// open); the card closes a moment after the pointer has left both. A pinned
+// card stays.
+function rmInfoPointer(e) {
+  if (e.pointerType !== 'mouse') return;
+  const info = rmUi.info;
+  const at = el => el?.closest?.('.rm-info, #rm-info-card');
+  if (e.type === 'pointerover') {
+    const t = at(e.target);
+    if (!t) return;
+    clearTimeout(rmUi.timers.info);
+    if (!t.matches('.rm-info') || t === info.anchor || info.pinned) return;
+    if (info.key != null) rmShowInfo(t);
+    else rmUi.timers.info = setTimeout(() => rmShowInfo(t), RM_INFO_OPEN_MS);
+  } else if (!info.pinned && at(e.target) && !at(e.relatedTarget)) {
+    clearTimeout(rmUi.timers.info);
+    rmUi.timers.info = setTimeout(rmHideInfo, RM_INFO_CLOSE_MS);
+  }
 }
 
 // ── The panel: format ───────────────────────────────────────
@@ -2230,6 +2442,7 @@ function rmSetPanelOpen(open, { announce = true } = {}) {
   const panel = els.namesPanel;
   if (!panel) return;
   panel.classList.toggle('hidden', !open);
+  if (!open) rmHideInfo();
   document.getElementById('toggle-tools')?.classList.toggle('active', open);
   try { localStorage.setItem(RM_PANEL_KEY, open ? '1' : '0'); } catch { /* this session only */ }
   if (open && announce) window.PDFHooks?.emit('sidepanel:shown', { id: panel.id });
@@ -2282,6 +2495,10 @@ function rmOnClick(e) {
     case 'close': rmSetPanelOpen(false); break;
     case 'add-names': rmAddTypedNames(); break;
     case 'more': rmUi.allFits = true; rmRenderBar(); break;
+    case 'info':   // pins the card (a hover only shows it); from the keyboard, the focus goes in
+      if (rmUi.info.anchor === t && rmUi.info.pinned) rmHideInfo();
+      else rmShowInfo(t, { pin: true, focus: e.detail === 0 });
+      break;
     case 'hide': {
       const row = t.closest('.rm-fit');
       if (row && box) hideMatch(box.id, row.dataset.key);
@@ -2441,6 +2658,7 @@ function rmWireResize(panel) {
   grip.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     e.preventDefault();
+    rmHideInfo();
     const bottom = matchMedia('(max-width: 768px)').matches;
     const start = bottom ? e.clientY : e.clientX;
     const size0 = bottom ? panel.offsetHeight : panel.offsetWidth;
@@ -2478,9 +2696,32 @@ function rmWirePanel() {
   panel.addEventListener('change', rmOnChange);
   panel.addEventListener('input', rmOnInput);
   panel.addEventListener('pointerdown', rmOnPointerDown);
-  // Escape closes a pill's controls, and the pill has the focus again
+  // the ℹ card: a mouse over an ℹ, a press anywhere else, the focus leaving
+  // it, the body scrolling or the window resizing
+  panel.addEventListener('pointerover', rmInfoPointer);
+  panel.addEventListener('pointerout', rmInfoPointer);
+  document.addEventListener('pointerdown', e => {
+    if (rmUi.info.key != null && !e.target.closest?.('.rm-info, #rm-info-card')) rmHideInfo();
+  }, true);
+  const card = document.getElementById('rm-info-card');
+  card?.addEventListener('focusout', e => {
+    const to = e.relatedTarget;
+    if (to && !card.contains(to) && to !== rmUi.info.anchor) rmHideInfo();
+  });
+  panel.querySelector('.rm-body')?.addEventListener('scroll', () => { if (rmUi.info.key != null) rmPlaceInfo(); }, { passive: true });
+  window.addEventListener('resize', () => { if (rmUi.info.key != null) rmPlaceInfo(); });
+  // Escape closes the ℹ card — the ℹ has the focus again — or a pill's
+  // controls, and the pill has the focus again
   panel.addEventListener('keydown', e => {
-    if (e.key !== 'Escape' || rmUi.pill == null || !e.target.closest?.('.rm-editor')) return;
+    if (e.key !== 'Escape') return;
+    if (rmUi.info.key != null) {
+      const back = e.target.closest?.('#rm-info-card') ? rmUi.info.anchor : null;
+      rmHideInfo();
+      back?.focus();
+      e.stopPropagation();
+      return;
+    }
+    if (rmUi.pill == null || !e.target.closest?.('.rm-editor')) return;
     const p = rmUi.pill;
     rmUi.pill = null;
     rmRenderFormat();

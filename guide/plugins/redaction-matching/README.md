@@ -4,7 +4,7 @@ Matches candidate names against redaction bars by **measured width**, and
 shows the result on the bar and in the *Name matching* panel. It owns that
 right panel (the `#tools-sidebar` host, its toolbar toggle, CSS and wiring),
 the name lists (`web/plugins/redaction_matching/*.json` + the names typed into
-the panel), each bar's *formats* and letter filter, and the label each bar
+the panel), each bar's *formats* and filter, and the label each bar
 shows. It does **not** detect bars — it matches against whatever `redaction`
 boxes exist (from `ocr_tool`, or the Add-Box tool).
 
@@ -27,19 +27,42 @@ the whole document's:
 
 | List | File | On at start |
 | --- | --- | --- |
-| People | `names.json` — 1,834 people, with their aliases, titles, suffixes, nicknames | yes |
+| People | `names.json` — 1,834 people, with their aliases, titles, suffixes, nicknames, and a middle initial, gender and e-mail addresses where known | yes |
 | Businesses | `contacts-businesses.json` — the businesses of the contacts book | no |
 | Your names | typed or pasted into the panel | yes |
 
 A shipped list is a JSON array in the plugin's folder, fetched through
 `assetURL` (so its URL carries the file's hash), declared by one line of
-`NAME_LISTS` in `api.js`. An entry is either `{ first: [...], last: [...],
-prefix, suffix, nickname, note }` — a person's first spelling is their own,
-the others are aliases; a business is a `last` alone — or a **plain string**,
+`NAME_LISTS` in `api.js`. An entry is either an object or a **plain string**,
 which every format writes as it stands (an e-mail address list is a file of
-strings and a line in `NAME_LISTS`). An entry whose `note` says it is a
-*section heading* (BRAZIL, MEDICAL — the contacts book's headings) is not a
-name and is skipped.
+strings and a line in `NAME_LISTS`):
+
+```json
+{ "first": ["Jeffrey", "Jeffrey E."], "middle": "E", "last": ["Epstein"], "prefix": null,
+  "nickname": null, "suffix": null, "gender": null, "email": [] }
+```
+
+- `first`, `last` — a person's first spelling is their own, the others are
+  aliases; a business is a `last` alone.
+- `middle` — a middle name or initial (a string, or several spellings).
+- `prefix`, `suffix`, `nickname` — one each, or null.
+- `gender` — `"f"` or `"m"` (`female` / `woman`, `male` / `man` read the
+  same); any other value counts as *not recorded*, as null does.
+- `email` — the person's addresses.
+- `note` — for the panel's tooltip. An entry whose note says it is a
+  *section heading* (BRAZIL, MEDICAL — the contacts book's headings) is not a
+  name and is skipped.
+
+Every field but `first` and `last` may be missing, null or empty. In
+`names.json` they are filled only where the list itself says so: a **gender**
+from a title that gives one (Mr, Ms, Mrs, Miss, Sir, Lady, Lord, Prince,
+Princess, Duke, Duchess, Earl, Baron, Baroness, Viscount, Viscountess,
+Marquess, Sheikh, Sultan, Señor) on an entry of one person — 68 of them; an
+entry for a couple (*Sir* over "Anthony" and "Carole" Bamford) is left
+without one — and a **middle initial** where a spelling of the first name
+writes it beside the plain one ("Jeffrey" and "Jeffrey E.": 21). No entry has
+an e-mail address yet. The Names section says, per list, how many entries
+record each.
 
 Your names come one per line or comma-separated (a comma is always a
 separator). A typed name is a person: its last word is the last name and the
@@ -70,15 +93,44 @@ A part is written the way it comes out:
 | `{first}.{last}` | sarah.kellen | aspen club |
 | `{Title} {Last}` | *(none — no title)* | *(none)* |
 
-`{First}` / `{Last}` are the names as the list spells them, `{FIRST}` /
-`{LAST}` in capitals, `{first}` / `{last}` in lowercase; `{F}` / `{L}` are the
-initials (`{f}` / `{l}` lowercase). `{Title}` (the list's `prefix`),
-`{Suffix}` and `{Nick}` exist for some entries only, and a format that asks
-for one writes **nothing** for an entry without it — turn on `{First} {Last}`
-beside `{Title} {First} {Last}` for everyone else. A missing first or last
-name drops out together with the characters before it, so an entry with one
-name (a business, `Abby`) reads the same under every format — but never as a
-lone initial. Every other character stands as typed.
+| Part | Writes |
+| --- | --- |
+| `{First}` `{Middle}` `{Last}` | the names as the list spells them |
+| `{F}` `{M}` `{L}` | their initials |
+| `{Nick}` | the nickname |
+| `{Title}` `{Suffix}` | the list's `prefix` and `suffix` |
+| `{Mr}` | *Mr* for an entry recorded as a man |
+| `{Ms}` `{Mrs}` `{Miss}` | *Ms*, *Mrs*, *Miss* for an entry recorded as a woman |
+| `{Email}` `{User}` `{Domain}` | an address, the part before its @, the part after it |
+
+A part in capitals comes out in capitals (`{LAST}`), in lowercase in
+lowercase (`{last}`), otherwise as the list has it; an initial is a capital
+unless it is written `{f}`. Every part but the first and last name exists for
+some entries only, and a format that asks for one writes **nothing** for an
+entry without it. A missing first or last name drops out together with the
+characters before it, so an entry with one name (a business, `Abby`) reads
+the same under every format — but never as a lone initial. Every other
+character stands as typed; a `\` writes the sign after it as it stands (`\[`,
+`\{`, `\|`, `\\`).
+
+Two signs make one pattern several, the way a regular expression matches
+several strings — here, though, every string is **made** and measured:
+
+| Pattern | Makes |
+| --- | --- |
+| `{First}[ {M}.] {Last}` — `[ … ]` is optional | Jeffrey Epstein, Jeffrey E. Epstein |
+| `[{Title} ]{First} {Last}` | Abdul Alianizi, Dr Abdul Alianizi |
+| `{First\|Nick} {Last}` — `{A\|B}` is either part | Dara Gehringer, Preece Gehringer |
+| `{First\|F.} {Last}` — each choice with text of its own | Sarah Kellen, S. Kellen |
+| `{Mr\|Ms}. {Last}` | Mr. … for the men, Ms. … for the women |
+
+The pattern is read into a tree (text, parts with their choices, optional
+groups, which nest) and spelt out into its **variants**, plain patterns of the
+first kind; each writes its names, and the format's names are all of theirs.
+A pattern of more than 32 variants is refused (*make it two formats*): every
+name is measured, and a few choices multiply quickly. A middle name is not
+written twice: under `{First} {M}. {Last}` the spelling "Jeffrey E." (which
+writes it already) makes nothing, and "Jeffrey" makes *Jeffrey E. Epstein*.
 
 A bar can have **several formats on**; its names are all of theirs. *Every
 spelling of first / last names* (on by default) takes every alias a person has
@@ -89,11 +141,42 @@ are never asked about.
 Formats belong to **each bar** (`box.nameSettings`): a new bar starts with a
 copy of the defaults, which the panel edits while no bar is selected; *Apply
 to all bars* gives every bar — and every new one — the selected bar's formats
-and spellings. The format editor sets the order of the two names, what stands
-between them (space, comma, full stop, underscore, hyphen, nothing), each
-name's case (as written, UPPERCASE, lowercase) and form (full, initial,
-initial with a full stop, left out), and a title or suffix; *Type a pattern*
-takes any pattern, for whatever the controls do not make.
+and spellings.
+
+### The pill editor
+
+A format opens as **pills on a track**, one per part of its tree, coloured by
+what they are — a name (blue), a title (violet), an e-mail address (green),
+text (grey, its spaces shown as ␣) — with a dashed frame around what is
+optional (its **?** makes it required again):
+
+- **Click** a pill for its controls. A part has one row per choice — which
+  part, its case (**Aa** as written, **AA** capitals, **aa** lowercase; an
+  initial **A** or **a**), a full stop after it — and *+ or another part* adds a choice (after
+  First comes Nickname, after Mr comes Ms). Text has one click for the usual
+  separators (␣ `,␣` `,` `.` `.␣` `_` `-` `@`) and a field for anything else;
+  emptied, the text goes when the field is left. Both have *Optional*, ← →
+  (a part changes places with the next part, the text between staying where it
+  is), and remove (a part goes with the text after it, or — last — the text
+  before it, so what stood around it still reads). Escape closes them.
+- **Drag** a pill, or an optional group as a whole, to a place between two
+  others (a caret shows where), or onto the middle of another part to swap
+  the two. Pointer events: a finger drags too.
+- **The palette** under the track adds First, Middle, Last, Title, Suffix,
+  Mr / Ms, E-mail or Text — at a click where it usually goes (a title first,
+  the middle initial after the first name, the rest last), or dragged to
+  where it should. A part only some entries have comes **optional**, with its
+  separator, beside other parts — `+ Middle` on `{First} {Last}` makes
+  `{First}[ {M.}] {Last}` — so the format still writes everyone else.
+- Under it: up to three **examples** (the first person each variant can
+  write, the richest first) and **how many names** the format makes for the
+  bar, through its filter; past 20,000 the count warns that measuring will
+  take a while. The Format section's head line gives the bar's total.
+
+*Type a pattern* is the same format as text. Typing redraws the pills at each
+keystroke that leaves the pattern readable (an error says what is wrong and
+the format keeps its last good pattern); a change made with the pills writes
+the pattern again.
 
 **Letter case** in Recto's Text panel (its Redaction match section; text_tool's `box.uppercase`, per bar)
 applies *on top of* the format — leave it at *As typed* and the format
@@ -102,12 +185,18 @@ it to capitals when the bar's line writes its other names that way). The
 hypothesis tester and the page-face widths apply it the same way, so all
 three see the same string.
 
-Each bar also has a **letter filter**: *starts with* / *ends with*, one or
-more letters, case-insensitive, on the name as written (so under
-`{LAST}, {First}` the start is the last name's). A refiner that finds a letter
-of the hidden name sticking out of the bar fills it for that bar through the
-`redaction:refined` event, unless the user typed one (*seen* in the Filter
-summary).
+Each bar also has a **filter**, its own (*Apply to all bars* leaves it be):
+
+- **Starts with / ends with** — one or more letters, case-insensitive, on the
+  name as written (so under `{LAST}, {First}` the start is the last name's).
+  A refiner that finds a letter of the hidden name sticking out of the bar
+  fills it for that bar through the `redaction:refined` event, unless the
+  user typed one (*seen* in the Filter summary).
+- **Gender** — *Women*, *Men*, *Not recorded*, all on at first: which entries
+  the bar's names come from. A typed name, a plain-string entry and most of
+  `names.json` have no gender recorded, so turning *Not recorded* off leaves
+  few names; the context of a bar ("she", "his wife") is what the filter is
+  for.
 
 ## Widths
 
@@ -209,15 +298,18 @@ tells the cases apart without new geometry:
   and 1.8 bar heights down.
 
 Linked bars are read as **one entry**, each half within its own bar's fit
-range. The halves are what a format writes before and after the space between
-its first and last name: `{First} {LAST}` puts `Sarah` on the first bar and
-`KELLEN` on the second, `{LAST} {First}` the other way round, `{Title} {First}
-{Last}` `Dr. Gregory` and `Bledsoe`. A format whose two names are joined by
-anything but a space makes no halves — the comma of `{Last}, {First}` would
-stand on the page between the bars — and neither does one with a single name.
-The halves come from the formats on either bar and every spelling either bar
-asks for, each through its own bar's letter filter; a typed name splits at
-its last space, and a plain-string entry has no halves. The gap between the
+range. The halves are what a format's variant writes before and after the
+space between the given names (first, middle, nickname) and the last name:
+`{First} {LAST}` puts `Sarah` on the first bar and `KELLEN` on the second,
+`{LAST} {First}` the other way round, `{Title} {First} {Last}` `Dr. Gregory`
+and `Bledsoe`, `{First} {M}. {Last}` `Jeffrey E.` and `Epstein` — an
+initial's full stop goes with it. A variant whose names are joined by
+anything else makes no halves — the comma of `{Last}, {First}` would stand on
+the page between the bars — and neither does one with a single name. The
+halves come from the variants of the formats on either bar and every spelling
+either bar asks for, each through its own bar's letter filter, and only from
+an entry both bars' gender filters let through (it is one person); a typed
+name splits at its last space, and a plain-string entry has no halves. The gap between the
 bars is detector ink, not a measured pen, so the halves are never summed
 across it. A **pair reading** shows this bar's half with the other half
 greyed beside it (the tooltip names the partner bar), the bar notes which bar
@@ -242,10 +334,13 @@ The *Name matching* panel, top to bottom:
   type (`140.92 px −0.81 too narrow`); Enter (or *Add*) adds it to Your names,
   Shift+Enter starts another line, and a pasted list adds every name.
 - **Format** (collapsed; its summary lists the formats on) — the selected
-  bar's formats, or the defaults for new bars; one opens in the editor.
-- **Filter** (collapsed; selected bar only) — starts with / ends with.
+  bar's formats and how many names they make, or the defaults for new bars;
+  one opens in the pill editor.
+- **Filter** (collapsed; selected bar only) — starts with / ends with, and
+  gender.
 - **Names** (collapsed; its summary says which lists are on and how many
-  entries) — the lists' switches and counts, Your names, the hidden.
+  entries) — the lists' switches and counts (under a list of people, how many
+  record a gender, a middle name, an e-mail address), Your names, the hidden.
 
 The panel is as wide as its left edge is dragged (double-click for the
 default); on a screen under 769 px it is a sheet docked at the bottom, as tall
@@ -286,7 +381,9 @@ kept.
   exposes: `getBoxMatchInfo`, `getBoxMatches`, `fitRange`,
   `effectiveTolerance`, `linkFor`, `halfStrings`, `scoreMatches`,
   `shownMatch`, `setBoxMatch`, `cycleBoxMatch`, `matchesLetterFilter`,
-  `parseNamePattern`, `nameFromPattern`, `makeNames`, `setNameList`.
+  `matchesGenderFilter`, `parseNamePattern` (→ `{ tree, variants, error }`),
+  `nameFromPattern` (one variant), `namesOfPattern` (all of them),
+  `patternOfNameTree`, `makeNames`, `setNameList`.
 
 ## Tests
 
@@ -302,9 +399,14 @@ kept.
   (pixel tolerance, the pen lattice, the detector padding), the loose
   fallback, the near-miss rescue, verdict ranking, the letter filter, the
   two-bar readings (row and line links, one entry across both, settings and
-  formats shaping the halves, pinning both bars, halves judged separately),
-  the formats (parts, case, missing names, the editor's controls, the default
-  format against the old *Full name* on `names.json`), and the lists.
+  formats shaping the halves, pinning both bars, halves judged separately, a
+  middle initial's and a choice's halves, both bars' gender filters), the
+  formats (parts old and new, case, missing names, optional groups, choices,
+  escapes and errors, the pills writing a pattern back as it was, what each
+  pill action does to the tree, the default format against the old *Full
+  name* on `names.json`), the lists (entries' new fields, a middle name not
+  written twice, `names.json` filled only where it says so) and the gender
+  filter.
 
 ## Dependencies
 

@@ -15,7 +15,7 @@ const skip = !plugins.some(p => p.name === 'redaction_matching') && 'plugin not 
 test('the panel is on the page', { skip }, () => {
   for (const id of [
     'tools-sidebar', 'toggle-tools', 'rm-bar', 'name-input', 'rm-try', 'rm-format', 'rm-format-sum',
-    'ns-starts-with', 'ns-ends-with', 'rm-names', 'rm-names-sum',
+    'ns-starts-with', 'ns-ends-with', 'ns-gender-f', 'ns-gender-m', 'ns-gender-x', 'rm-names', 'rm-names-sum',
   ]) assert.ok(html.includes(`id="${id}"`), `#${id} is missing from the generated page`);
   // the old candidates table and All Matches card are gone, and no control is wired inline
   for (const gone of ['names-body', 'all-matches-body', 'paste-input', 'onclick=']) {

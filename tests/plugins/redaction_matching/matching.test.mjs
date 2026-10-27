@@ -1,8 +1,9 @@
 // matching.test.mjs — the matcher under Node with the viewer's globals
 // stubbed: which names fit a bar (pixel tolerance vs the pen-exact lattice a
 // refiner can vouch for), the loose fallback, how page-pixel verdicts from an
-// optional hypothesis tester rank the list, two bars read as one name, and
-// the formats and lists the names come from. Run directly
+// optional hypothesis tester rank the list, two bars read as one name, the
+// formats (their parts, optional groups and choices, and what the pill
+// editor does to them) and the lists and filters the names come from. Run directly
 // (`node tests/plugins/redaction_matching/matching.test.mjs`) or with the
 // whole suite (`node --test "tests/**/*.test.mjs"`).
 import fs from 'node:fs';
@@ -40,7 +41,7 @@ globalThis.fetch = async () => ({ ok: false, status: 404 });
 vm.runInThisContext(fs.readFileSync(path.join(root, 'api.js'), 'utf8'));
 for (const fn of ['getBoxMatchInfo', 'getBoxMatches', 'effectiveTolerance', 'scoreMatches', 'shownMatch', 'matchesLetterFilter',
                   'linkFor', 'halfStrings', 'setBoxMatch', 'cycleBoxMatch', 'fitRange', 'parseNamePattern', 'nameFromPattern',
-                  'makeNames', 'setNameList', 'calculateWidthsForRedaction']) {
+                  'namesOfPattern', 'patternOfNameTree', 'makeNames', 'setNameList', 'calculateWidthsForRedaction']) {
   assert.equal(typeof globalThis[fn], 'function', `${fn} is a global`);
 }
 
@@ -396,9 +397,14 @@ test('without a refiner verdict no bar is linked', () => {
 
 // ── Formats and lists ──────────────────────────────────────
 
+// One spelling of an entry, as nameSpellings makes them.
+const spelling = (v) => ({ first: null, middle: null, last: null, prefix: null, suffix: null, nickname: null, email: null, gender: null, ...v });
+// What a pattern writes for one spelling: its variants' names, ' / ' between them.
+const write = (pattern, v) => namesOfPattern(parseNamePattern(pattern), spelling(v)).join(' / ') || null;
+const sarah = { first: 'Sarah', last: 'Kellen' };
+const jeffrey = { first: 'Jeffrey', middle: 'E', last: 'Epstein' };
+
 test('a format writes each part as its token is written; a missing name drops out with its separator', () => {
-  const write = (pattern, v) => nameFromPattern(parseNamePattern(pattern), { first: null, last: null, prefix: null, suffix: null, nickname: null, ...v });
-  const sarah = { first: 'Sarah', last: 'Kellen' };
   assert.equal(write('{First} {Last}', sarah), 'Sarah Kellen');
   assert.equal(write('{LAST}, {First}', sarah), 'KELLEN, Sarah');
   assert.equal(write('{F}. {Last}', sarah), 'S. Kellen');
@@ -414,19 +420,89 @@ test('a format writes each part as its token is written; a missing name drops ou
   // a title, suffix or nickname is only written for an entry that has one
   assert.equal(write('{Title} {Last}', sarah), null);
   assert.equal(write('{Title} {Last}', { ...sarah, prefix: 'Ms.' }), 'Ms. Kellen');
-  assert.match(parseNamePattern('{First} {Middle}').error, /Middle/);
+  assert.match(parseNamePattern('{First} {Muddle}').error, /Muddle/);
   assert.ok(parseNamePattern('Kellen').error, 'a pattern needs a part');
   assert.equal(nameFormatLabel('{LAST}, {First}'), 'LAST, First');
 });
 
-test('the editor\'s controls make every preset they can, and give up on the rest', () => {
-  for (const p of NAME_FORMAT_PRESETS) {
-    const c = nameControlsOf(p);
-    if (c) assert.equal(patternOfNameControls(c), p, `${p} round-trips through the controls`);
+test('the new parts: a middle name, an address and its halves, Mr or Ms by a recorded gender', () => {
+  assert.equal(write('{First} {Middle} {Last}', { ...jeffrey, middle: 'Edward' }), 'Jeffrey Edward Epstein');
+  assert.equal(write('{F}. {M}. {Last}', jeffrey), 'J. E. Epstein');
+  assert.equal(write('{First} {M}. {Last}', sarah), null, 'no middle name, nothing written');
+  const mail = { ...jeffrey, email: 'jeevacation@gmail.com' };
+  assert.equal(write('{Email}', mail), 'jeevacation@gmail.com');
+  assert.equal(write('{User}', mail), 'jeevacation');
+  assert.equal(write('{first}.{last}@{Domain}', mail), 'jeffrey.epstein@gmail.com');
+  assert.equal(write('{EMAIL}', mail), 'JEEVACATION@GMAIL.COM');
+  assert.equal(write('{Email}', jeffrey), null);
+  assert.equal(write('{Mr|Ms}. {Last}', { ...jeffrey, gender: 'm' }), 'Mr. Epstein');
+  assert.equal(write('{Mr|Ms}. {Last}', { ...sarah, gender: 'f' }), 'Ms. Kellen');
+  assert.equal(write('{Mr|Ms}. {Last}', sarah), null, 'no gender recorded, no Mr or Ms');
+  assert.equal(write('{MRS} {LAST}', { ...sarah, gender: 'f' }), 'MRS KELLEN');
+});
+
+test('optional groups and choices spell one pattern out into several', () => {
+  assert.equal(parseNamePattern('{First}[ {M}.] {Last}').variants.length, 2);
+  assert.equal(write('{First}[ {M}.] {Last}', jeffrey), 'Jeffrey Epstein / Jeffrey E. Epstein');
+  assert.equal(write('{First}[ {M}.] {Last}', sarah), 'Sarah Kellen', 'the variant without the middle name writes everyone else');
+  assert.equal(write('[{Title} ]{First} {Last}', { ...sarah, prefix: 'Ms.' }), 'Sarah Kellen / Ms. Sarah Kellen');
+  assert.equal(write('{First|Nick} {Last}', { ...sarah, nickname: 'Sissy' }), 'Sarah Kellen / Sissy Kellen');
+  assert.equal(write('{First|F.} {Last}', sarah), 'Sarah Kellen / S. Kellen', 'a choice carries its own text');
+  assert.equal(write('{F}[.] {Last}', sarah), 'S Kellen / S. Kellen', 'text alone can be optional');
+  assert.equal(parseNamePattern('{First}[ {M}.[ ({Nick})]] {Last}').variants.length, 3, 'groups nest');
+  assert.equal(parseNamePattern('{First|First} {Last}').variants.length, 1, 'the same variant twice is one');
+  assert.equal(write('{Last} \\[{First}\\]', sarah), 'Kellen [Sarah]', 'a \\ writes a sign as it stands');
+  for (const [pattern, error] of [
+    ['{First} [{Last}', /\[/], ['{First}] {Last}', /\]/], ['{First {Last}', /\{/], ['{First} {Last}}', /\}/],
+    ['{First|}', /no part/], ['{First}|{Last}', /\|/], ['{Frist} {Last}', /Frist/], ['{Last}\\', /\\/],
+    ['{First|Nick|F}{Last|L}[a][b][c][d]', /96 variants/],
+  ]) assert.match(parseNamePattern(pattern).error || '', error, pattern);
+  assert.ok(parseNamePattern('{First|Nick|F}{Last|L}[a][b][c][d]').tree, 'too many variants is still a tree the pills can show');
+});
+
+test('the pills write a pattern back as it was', () => {
+  for (const p of [...NAME_FORMAT_PRESETS, '{Last} \\[{First}\\]', '{First}[ {M}.[ ({Nick})]] {Last}', '{(Nick)|F.} {Last}']) {
+    assert.equal(patternOfNameTree(parseNamePattern(p).tree), p);
   }
-  assert.equal(nameControlsOf('{Nick}'), null);
-  assert.equal(nameControlsOf('{first}.{last}@x'), null);
-  assert.deepEqual(nameControlsOf('{LAST}, {First}').last, { kase: 'upper', form: 'full' });
+  assert.equal(patternOfNameTree(parseNamePattern('{ Last }').tree), '{Last}', 'spaces in braces are not kept');
+});
+
+test('what the pills do to a tree: optional, required, remove, move, add', () => {
+  const edit = (pattern, fn) => {
+    const tree = structuredClone(parseNamePattern(pattern).tree);
+    const out = fn(tree);
+    return [patternOfNameTree(tree), out];
+  };
+  // optional: a part with the text before it and the full stop clinging to it — first in its run, the text after it
+  assert.deepEqual(edit('{First} {M}. {Last}', t => nameTreeWrap(t, [2])), ['{First}[ {M}.] {Last}', [1, 1]]);
+  assert.deepEqual(edit('{Title} {First} {Last}', t => nameTreeWrap(t, [0])), ['[{Title} ]{First} {Last}', [0, 0]]);
+  assert.deepEqual(edit('{First} {Last}, {Suffix}', t => nameTreeWrap(t, [4]))[0], '{First} {Last}[, {Suffix}]');
+  assert.deepEqual(edit('{F}. {Last}', t => nameTreeWrap(t, [1]))[0], '{F}[. ]{Last}', 'text alone');
+  assert.deepEqual(edit('{First}[ {M}.] {Last}', t => nameTreeUnwrap(t, [1]))[0], '{First} {M}. {Last}');
+  // remove: a part goes with the text after it, or — last — the text before it; an emptied group goes
+  assert.equal(edit('{First} {M}. {Last}', t => nameTreeRemove(t, [2]))[0], '{First} {Last}');
+  assert.equal(edit('{Last}, {First}', t => nameTreeRemove(t, [2]))[0], '{Last}');
+  assert.equal(edit('{Title} {First} {Last}', t => nameTreeRemove(t, [0]))[0], '{First} {Last}');
+  assert.equal(edit('{First}[ {M}.] {Last}', t => nameTreeRemove(t, [1, 1]))[0], '{First} {Last}');
+  // a part steps over text to the next part; text steps one place; a drag moves one node
+  assert.deepEqual(edit('{Last}, {First}', t => nameTreeStep(t, [2], -1)), ['{First}, {Last}', [0]]);
+  assert.deepEqual(edit('{First} {Last}', t => nameTreeStep(t, [1], 1)), ['{First}{Last} ', [2]]);
+  assert.deepEqual(edit('{First} {Last}', t => nameTreeStep(t, [0], -1)), ['{First} {Last}', [0]], 'nowhere to go');
+  assert.equal(edit('{First} {Last}', t => nameTreeMove(t, 2, 0))[0], '{Last}{First} ');
+  // the palette: where a part usually goes, optional when only some entries have it
+  assert.deepEqual(edit('{First} {Last}', t => nameTreeAdd(t, 'middleInitial')), ['{First}[ {M.}] {Last}', [1, 1]]);
+  assert.equal(edit('{First} {Last}', t => nameTreeAdd(t, 'prefix'))[0], '[{Title} ]{First} {Last}');
+  assert.equal(edit('{First} {Last}', t => nameTreeAdd(t, 'mr|ms'))[0], '[{Mr|Ms} ]{First} {Last}');
+  assert.equal(edit('{First} {Last}', t => nameTreeAdd(t, 'suffix'))[0], '{First} {Last}[ {Suffix}]');
+  assert.equal(edit('', t => nameTreeAdd(t, 'email'))[0], '{Email}', 'alone, nothing to be optional beside');
+  assert.equal(edit('{First} {Last}', t => nameTreeAdd(t, 'last', 0))[0], '{Last} {First} {Last}', 'dropped where it was dropped');
+  assert.deepEqual(edit('{First}', t => nameTreeAdd(t, 'text')), ['{First} ', [1]]);
+  // a choice's word, and what "or" offers next
+  assert.equal(nameAltOf('firstInitial', 'lower').word, 'f');
+  assert.equal(nameAltOf('last', 'upper').word, 'LAST');
+  assert.equal(nameAltKase(nameAltOf('firstInitial', 'upper')), 'as', 'a capital initial is as written');
+  assert.equal(nameAltNext({ alts: [nameAltOf('first')] }), 'nickname');
+  assert.equal(nameAltNext({ alts: [nameAltOf('mr'), nameAltOf('ms')] }), 'mrs');
 });
 
 test('the default format makes the same names from names.json as the old Full name did', () => {
@@ -454,6 +530,56 @@ test('lists: businesses are off until switched on; headings and plain strings; t
   assert.deepEqual([...makeNames(s).keys()], ['KELLEN, Sarah', 'x@y.org']);
   state.hiddenEntries.add('people:0');
   assert.deepEqual([...makeNames(s).keys()], ['x@y.org']);
+});
+
+test('entries: a middle name, addresses and a gender are read; a spelling that writes the middle name is not given it again', () => {
+  const e = nameEntry({ first: ['Jeffrey', 'Jeffrey E.'], middle: 'E', last: ['Epstein'], gender: 'M', email: 'jeevacation@gmail.com' });
+  assert.deepEqual([e.middle, e.gender, e.email], [['E'], 'm', ['jeevacation@gmail.com']]);
+  assert.deepEqual(['female', 'Woman', 'male', 'nonbinary', '', null].map(nameGender), ['f', 'f', 'm', 'x', null, null]);
+  assert.ok(nameEntry({ first: [], last: [], email: ['a@b.org'] }), 'an address alone is an entry');
+  useNames([person(['Jeffrey', 'Jeffrey E.'], 'Epstein', { middle: 'E' })]);
+  const names = (...patterns) => [...makeNames({ ...defaultNameSettings(), formats: patterns.map((pattern, i) => ({ id: `f${i}`, pattern, on: true })) }).keys()].sort();
+  assert.deepEqual(names('{First} {M}. {Last}'), ['Jeffrey E. Epstein'], 'not "Jeffrey E. E. Epstein"');
+  assert.deepEqual(names('{First}[ {M}.] {Last}'), ['Jeffrey E. Epstein', 'Jeffrey Epstein']);
+  assert.deepEqual(names('{F}. {M}. {Last}'), ['J. E. Epstein']);
+});
+
+test('the gender filter: women, men, and those with none recorded', () => {
+  useNames([person('Sarah', 'Kellen', { gender: 'f' }), person('Jeffrey', 'Epstein', { gender: 'm' }), person('Lex', 'Wexner')], ['Ghislaine Maxwell']);
+  const names = (gender) => [...makeNames({ ...defaultNameSettings(), gender }).keys()].sort();
+  assert.deepEqual(names({ f: true, m: true, x: true }), ['Ghislaine Maxwell', 'Jeffrey Epstein', 'Lex Wexner', 'Sarah Kellen']);
+  assert.deepEqual(names({ f: true, m: false, x: false }), ['Sarah Kellen']);
+  assert.deepEqual(names({ f: false, m: true, x: true }), ['Ghislaine Maxwell', 'Jeffrey Epstein', 'Lex Wexner'], 'a typed name has no gender recorded');
+  assert.equal(matchesGenderFilter({ text: 'a@b.org' }, { gender: { f: true, m: true, x: false } }), false);
+  assert.deepEqual(completeNameSettings({ formats: [] }).gender, { f: true, m: true, x: true }, 'old settings let everyone through');
+});
+
+test('names.json: every person has the new fields, filled only where the list says', () => {
+  const people = JSON.parse(fs.readFileSync(path.join(root, 'names.json'), 'utf8'));
+  for (const p of people) assert.ok('middle' in p && 'gender' in p && Array.isArray(p.email), `${p.first[0]} ${p.last[0]}`);
+  // a gender from a title that gives one (Mr, Lady, Prince …) on an entry of one person
+  const MEN = /^(mr|sir|lord|prince|sultan|sheikh|senor|viscount|baron|earl|duke|marquess)\.?$/i;
+  const WOMEN = /^(ms|mrs|miss|lady|princess|viscountess|duchess|baroness)\.?$/i;
+  for (const p of people.filter(x => x.gender)) assert.ok((p.gender === 'm' ? MEN : WOMEN).test(p.prefix || ''), `${p.last[0]}: ${p.gender} beside ${p.prefix}`);
+  assert.equal(people.find(p => p.last[0] === 'Bamford').gender, null, 'Sir Anthony and Carole Bamford are two people');
+  // a middle initial where a spelling of the first name writes it
+  for (const p of people.filter(x => x.middle)) assert.ok(p.first.includes(`${p.first[0]} ${p.middle}.`), `${p.first[0]} ${p.last[0]}`);
+});
+
+test('two bars: the halves of a middle initial, a choice of parts; a pair needs both bars\' gender filters', () => {
+  const { A, B } = pairFixture('row');
+  const keep = utbState.boxes; utbState.boxes = [];
+  setNameList('people', [...PERSONS, person('Jeffrey', 'Epstein', { middle: 'E', gender: 'm', nickname: 'Jeff' })]);
+  utbState.boxes = keep;
+  for (const box of [A, B]) box.nameSettings.formats = [{ id: 'f1', pattern: '{First|Nick}[ {M}.] {Last}', on: true }];
+  A.widths['Jeffrey E.'] = 40.0; A.widths.Jeff = 39.0; B.widths.Epstein = 76.0;
+  // "Jeffrey E." (the middle initial goes with the first half) and "Jeff" (the nickname) fit A
+  assert.deepEqual(pairKeys(A).sort(), ['pair:Jeffrey E.|Epstein', 'pair:Jeff|Epstein', 'pair:Nadia|Marcinkova']);
+  A.nameSettings.gender = { f: true, m: false, x: true };
+  assert.deepEqual(pairKeys(A), ['pair:Nadia|Marcinkova'], 'a man on one bar\'s filter is no pair, whatever the other bar lets through');
+  const halves = p => nameVariantHalves(parseNamePattern(p).variants[0])?.map(h => nameFromPattern(h, spelling(sarah)));
+  assert.deepEqual(halves('{F}. {Last}'), ['S.', 'Kellen'], 'an initial\'s full stop goes with it');
+  assert.equal(halves('{Title}. {Last}'), undefined, 'a title is no name of its own');
 });
 
 test('each bar has its own settings, copied from the defaults; Apply to all bars copies one bar\'s', () => {

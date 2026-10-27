@@ -602,11 +602,19 @@ function nameEntry(raw) {
   const e = {
     first: spellings(raw.first), middle: spellings(raw.middle), last: spellings(raw.last),
     prefix: raw.prefix || null, suffix: raw.suffix || null, nickname: raw.nickname || null,
-    email: spellings(raw.email), gender: nameGender(raw.gender), note: raw.note || '',
+    email: spellings(raw.email).filter(nameEmailWhole), emailCut: spellings(raw.email).filter(a => !nameEmailWhole(a)),
+    gender: nameGender(raw.gender), note: raw.note || '',
     links: nameLinks(raw.links),
   };
   return e.first.length || e.last.length || e.nickname || e.email.length ? e : null;
 }
+
+// A whole e-mail address: something, an @, a domain with a dot and an ending.
+// A list read off a page has addresses cut off at the edge (`jcayne@`,
+// `katieford@fordmanagement.`, `mzuckerman@bostonproperti`): those are kept
+// apart (`emailCut`), shown in the ℹ card, and written by no format — a cut
+// address would be measured short and could fit a bar the real one would not.
+const nameEmailWhole = a => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(a);
 
 // An entry's links as its file has them, string values only:
 // { "adress-book": "p75" } (sic) is the page of the address book it was read
@@ -636,7 +644,7 @@ function typedNameEntry(s) {
   const m = /^(.+) (\S+)$/.exec(t);
   return {
     first: m ? [m[1]] : [], middle: [], last: [m ? m[2] : t], prefix: null, suffix: null, nickname: null,
-    email: [], gender: null, note: '', links: {},
+    email: [], emailCut: [], gender: null, note: '', links: {},
   };
 }
 
@@ -1652,7 +1660,7 @@ function rmVerdictText(box, name) {
   return `${vd.verdict}${vd.open ? ` · open ${vd.open.match ?? 0}/${vd.open.ink ?? 0} match` : ''}${vd.unexplained ? ` · ${vd.unexplained} unexplained` : ''}`;
 }
 
-// Where a reading's name came from, for its tooltip and tag.
+// Where a reading's name came from, for its list tag.
 function rmOrigin(box, e) {
   const o = e.kind === 'pair' ? e.origin : barNames(box).names.get(e.name)?.[0];
   if (!o) return null;
@@ -1660,22 +1668,25 @@ function rmOrigin(box, e) {
   return { list, entry: list?.entries[o.index] || null };
 }
 
-function rmFitTitle(box, e, loose) {
+// The ℹ card's head: how the reading fits — its width against the bar, the
+// page's verdict, why a near miss is kept, and a pair's other half.
+function rmInfoFitHtml(box, e, loose) {
   const w = box.widths?.[e.name];
-  const width = w != null ? `${w.toFixed(2)} px, ${rmSigned(w - box.w)} against the bar` : '';
   const verdict = rmVerdictText(box, e.name);
-  const origin = rmOrigin(box, e);
-  const from = origin?.list ? ` · from ${origin.list.label}${origin.entry?.note ? ` (${origin.entry.note})` : ''}` : '';
-  if (e.kind !== 'pair') {
-    const nearNote = e.near && !loose ? ' · outside the pen lattice, kept because the page does not contradict it' : '';
-    return `${[verdict, width].filter(Boolean).join(' · ')}${nearNote}${from}`;
+  const lines = [];
+  if (e.kind === 'pair') {
+    const other = typeof utbState !== 'undefined' ? utbState.getBox(e.partnerId) : null;
+    const where = e.link === 'row'
+      ? (e.name === e.first ? 'the bar to the right' : 'the bar to the left')
+      : (e.name === e.first ? 'the first bar of the next line' : 'the last bar of the line before');
+    const ov = other ? rmVerdictText(other, e.partnerName) : '';
+    lines.push(`One name over two bars: ${escAttr(e.full)}`);
+    lines.push(`${where[0].toUpperCase()}${where.slice(1)} holds ${escAttr(e.partnerName)}${ov ? ` (${escAttr(ov)})` : ''}`);
   }
-  const other = utbState.getBox(e.partnerId);
-  const where = e.link === 'row'
-    ? (e.name === e.first ? 'the bar to the right' : 'the bar to the left')
-    : (e.name === e.first ? 'the first bar of the next line' : 'the last bar of the line before');
-  const ov = other ? rmVerdictText(other, e.partnerName) : '';
-  return `${e.full} — one name over two bars. This bar: ${e.name} (${verdict || width}); ${where}: ${e.partnerName}${ov ? ` (${ov})` : ''}${from}`;
+  if (w != null) lines.push(`${e.kind === 'pair' ? `${escAttr(e.name)}: ` : ''}${w.toFixed(2)} px, <b>${rmSigned(w - box.w)}</b> against the bar`);
+  if (verdict) lines.push(`Page: ${escAttr(verdict)}`);
+  if (e.near && !loose) lines.push('Outside the pen lattice, kept because the page does not contradict it');
+  return lines.length ? `<div class="rm-info-fit">${lines.map(l => `<div>${l}</div>`).join('')}</div>` : '';
 }
 
 function rmFitRow(box, e, { shown, pickable, tagged, loose }) {
@@ -1690,9 +1701,9 @@ function rmFitRow(box, e, { shown, pickable, tagged, loose }) {
   const origin = tagged ? rmOrigin(box, e) : null;
   const cls = ['rm-fit', shown && 'is-shown', pinned && 'is-pinned', v && `v-${v}`, e.kind === 'pair' && 'is-pair',
     e.near && 'is-near', pickable && 'is-pickable'].filter(Boolean).join(' ');
-  // the ℹ: an empty title keeps the row's tooltip off it — its card says more
-  const about = `<button type="button" class="rm-info" data-act="info" title="" aria-label="About ${escAttr(e.full)}" aria-controls="rm-info-card" aria-expanded="${rmUi.info.key === e.key}">${rmIcon('info')}</button>`;
-  return `<li class="${cls}" data-key="${escAttr(e.key)}" title="${escAttr(rmFitTitle(box, e, loose))}">
+  // the ℹ: everything about the reading is in its card
+  const about = `<button type="button" class="rm-info" data-act="info" aria-label="About ${escAttr(e.full)}" aria-controls="rm-info-card" aria-expanded="${rmUi.info.key === e.key}">${rmIcon('info')}</button>`;
+  return `<li class="${cls}" data-key="${escAttr(e.key)}">
       <span class="rm-mark">${v ? VERDICT_MARK[v] : ''}</span>
       <span class="rm-fit-who"><span class="rm-fit-name" style="${rmFamily(box)}">${shownName}</span>${about}</span>
       <span class="rm-fit-meta">${origin?.list && origin.list.id !== 'people' ? `<span class="rm-tag">${escAttr(origin.list.label)}</span>` : ''}${pinned ? rmIcon('push_pin', 'rm-pin') : ''}<span class="rm-px">${w != null ? rmSigned(w - box.w) : ''}</span></span>
@@ -1778,7 +1789,8 @@ async function rmRenderTry() {
 }
 
 // ── The panel: the ℹ card ───────────────────────────────────
-// The ℹ behind a fitting name opens a card on who it is: every entry that
+// The ℹ behind a fitting name opens a card with everything about it: how it
+// fits (rmInfoFitHtml — the row has no tooltip), then who it is: every entry that
 // writes the name (a pair's one), as its list records it — the full name,
 // other spellings, a gender, e-mail addresses, a note, the address-book page,
 // the Wikipedia section. Hovering the ℹ shows it, and it stays while the
@@ -1805,6 +1817,7 @@ function rmInfoEntryHtml(list, x) {
   const row = (icon, html) => `<li>${rmIcon(icon)}<span>${html}</span></li>`;
   const rows = [
     ...(x.email || []).map(a => row('mail', escAttr(a))),
+    ...(x.emailCut || []).map(a => row('mail', `${escAttr(a)} <span class="rm-info-cut" title="Cut off in the list: no format writes it">cut off</span>`)),
     x.note ? row('sticky_note_2', escAttr(x.note)) : '',
     ...nameEntryLinks(x).map(l => row(RM_LINK_ICONS[l.kind], l.href
       ? `<a href="${escAttr(l.href)}" target="_blank" rel="noopener noreferrer">${escAttr(l.text)}${rmIcon('open_in_new', 'rm-info-ext')}</a>`
@@ -1818,12 +1831,13 @@ function rmInfoEntryHtml(list, x) {
     </div>`;
 }
 
-/** The ℹ card of one of a bar's readings. */
-function rmInfoHtml(box, e) {
+/** The ℹ card of one of a bar's readings: how it fits, then who it is. */
+function rmInfoHtml(box, e, loose = false) {
   const who = rmInfoEntries(box, e);
-  if (!who.length) return '<p class="rm-info-more">No list holds this name any more.</p>';
+  const fit = rmInfoFitHtml(box, e, loose);
+  if (!who.length) return `${fit}<p class="rm-info-more">No list holds this name any more.</p>`;
   const more = who.length - RM_INFO_ENTRIES;
-  return `${who.slice(0, RM_INFO_ENTRIES).map(({ list, entry }) => rmInfoEntryHtml(list, entry)).join('')}
+  return `${fit}${who.slice(0, RM_INFO_ENTRIES).map(({ list, entry }) => rmInfoEntryHtml(list, entry)).join('')}
     ${more > 0 ? `<p class="rm-info-more">and ${more} more ${more === 1 ? 'entry writes' : 'entries write'} this name</p>` : ''}`;
 }
 
@@ -1834,7 +1848,7 @@ function rmShowInfo(btn, { pin = false, focus = false } = {}) {
   const box = getSelectedRedaction();
   const key = btn?.closest('.rm-fit')?.dataset.key;
   if (!card || !box || key == null) return;
-  const { entries, near } = getBoxMatchInfo(box);
+  const { entries, near, loose } = getBoxMatchInfo(box);
   const e = [...entries, ...near].find(x => x.key === key);
   if (!e) { rmHideInfo(); return; }
   const info = rmUi.info;
@@ -1842,7 +1856,7 @@ function rmShowInfo(btn, { pin = false, focus = false } = {}) {
   if (info.anchor !== btn) info.anchor?.setAttribute('aria-expanded', 'false');
   Object.assign(info, { key, anchor: btn, pinned: pin });
   btn.setAttribute('aria-expanded', 'true');
-  const html = rmInfoHtml(box, e);
+  const html = rmInfoHtml(box, e, loose);
   if (html !== info.html) { card.innerHTML = html; info.html = html; }
   card.classList.remove('hidden');
   rmPlaceInfo();

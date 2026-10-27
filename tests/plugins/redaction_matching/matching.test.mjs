@@ -600,7 +600,7 @@ test('the ℹ card shows each entry that writes a name, a pair\'s one, and what 
                    'Address book, page 15', 'Address book, page 70', `href="${NAME_WIKI_LIST}#Gosman" target="_blank" rel="noopener noreferrer"`]) {
     assert.ok(html.includes(s), s);
   }
-  assert.ok(!html.includes('<b>'), 'a list\'s text is never markup');
+  assert.ok(!html.includes('abe@<b>'), 'a list\'s text is never markup');
   // more than three entries: the rest are counted
   useNames(Array.from({ length: 5 }, () => person('Abe', 'Gosman')));
   assert.match(rmInfoHtml(box, abe), /and 2 more entries write this name/);
@@ -609,6 +609,37 @@ test('the ℹ card shows each entry that writes a name, a pair\'s one, and what 
   const pair = getBoxMatchInfo(A).entries[0];
   assert.deepEqual(rmInfoEntries(A, pair).map(x => nameEntryFull(x.entry)), ['Nadia Marcinkova']);
   assert.match(rmInfoHtml(A, pair), /also Nada Marcinkova/);
+});
+
+test('a cut-off e-mail address is written by no format, and the ℹ card marks it', () => {
+  const e = nameEntry({ first: ['James'], last: ['Cayne'], email: ['jcayne@', 'jc@bear.com', 'katie@fordmanagement.', 'm@bostonproperti'] });
+  assert.deepEqual([e.email, e.emailCut], [['jc@bear.com'], ['jcayne@', 'katie@fordmanagement.', 'm@bostonproperti']]);
+  useNames([person('James', 'Cayne', { email: ['jcayne@', 'jc@bear.com'] })]);
+  const names = (pattern) => [...makeNames({ ...defaultNameSettings(), formats: [{ id: 'f', pattern, on: true }] }).keys()];
+  assert.deepEqual(names('{Email}'), ['jc@bear.com']);
+  assert.deepEqual(names('{Domain}'), ['bear.com']);
+  const box = bar({ widths: { 'James Cayne': 120.5 } });
+  const html = rmInfoHtml(box, getBoxMatchInfo(box).entries[0]);
+  assert.match(html, /jcayne@ <span class="rm-info-cut"[^>]*>cut off</);
+  assert.ok(!/jc@bear\.com <span class="rm-info-cut"/.test(html));
+  const people = JSON.parse(fs.readFileSync(path.join(root, 'names.json'), 'utf8')).map(nameEntry).filter(Boolean);
+  assert.ok(people.every(p => p.email.every(a => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(a))), 'names.json: only whole addresses are written');
+});
+
+test('the ℹ card says how a reading fits: width against the bar, the page, a near miss, a pair\'s other bar', () => {
+  useNames(WIDTH_PEOPLE);
+  const box = bar();
+  box.verdicts = { 'Sarah Kellen': { verdict: 'consistent' } };
+  const info = getBoxMatchInfo(box);
+  const sarah = info.entries.find(e => e.name === 'Sarah Kellen');
+  const html = rmInfoHtml(box, sarah, info.loose);
+  assert.match(html, /120\.44 px, <b>−0\.06<\/b> against the bar/);
+  assert.match(html, /Page: consistent/);
+  assert.match(rmInfoHtml(box, { ...sarah, near: true }), /Outside the pen lattice/);
+  assert.doesNotMatch(rmInfoHtml(box, { ...sarah, near: true }, true), /Outside the pen lattice/, 'not on a loose list: there all are near');
+  const { A } = pairFixture('row');
+  assert.match(rmInfoHtml(A, getBoxMatchInfo(A).entries[0]), /One name over two bars: Nadia Marcinkova<\/div><div>The bar to the right holds Marcinkova/);
+  box.verdicts = null;
 });
 
 test('the lists\' links: an address-book page is a page, a Wikipedia link a section of the list', () => {

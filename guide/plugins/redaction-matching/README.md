@@ -49,7 +49,10 @@ strings and a line in `NAME_LISTS`):
 - `prefix`, `suffix`, `nickname` — one each, or null.
 - `gender` — `"f"` or `"m"` (`female` / `woman`, `male` / `man` read the
   same); any other value counts as *not recorded*, as null does.
-- `email` — the person's addresses.
+- `email` — the person's addresses. One cut off where the list was read
+  (`jcayne@`, `katieford@fordmanagement.` — no domain ending after the @) is
+  written by no format: measured short, it could fit a bar the real address
+  would not. The ℹ card shows it, marked *cut off* (68 in `names.json`).
 - `note` — shown in the ℹ card (a business's address, number or contact). An
   entry whose note says it is a *section heading* (BRAZIL, MEDICAL — the
   contacts book's headings) is not a name and is skipped.
@@ -268,7 +271,7 @@ press `[` / `]` with the bar selected.
 **Near misses.** Names the pen lattice excludes but the pixel tolerance admits
 are not thrown away. With a hypothesis tester present they are scored too, and
 one the page **could not contradict** joins the list (its offset underlined
-with dots; the tooltip says so) — width ranks, the page decides. That is what
+with dots; its ℹ card says so) — width ranks, the page decides. That is what
 kept *Richard Barnett* in view while HarfBuzz still formed the `tt` ligature
 that put it 0.51 px short of its pen-exact bar. The others wait folded under
 *n near misses*. Without a tester they are the fallback when nothing fits at
@@ -323,7 +326,7 @@ an entry both bars' gender filters let through (it is one person); a typed
 name splits at its last space, and a plain-string entry has no halves. The gap between the
 bars is detector ink, not a measured pen, so the halves are never summed
 across it. A **pair reading** shows this bar's half with the other half
-greyed beside it (the tooltip names the partner bar), the bar notes which bar
+greyed beside it (its ℹ card names the partner bar), the bar notes which bar
 holds the other half, and pinning it labels both bars (unpinning unpins
 both). Each half is judged on its own bar by the hypothesis tester:
 contradicted anywhere is contradicted, consistent on both is consistent,
@@ -354,12 +357,15 @@ The *Name matching* panel, top to bottom:
   entries) — the lists' switches and counts (under a list of people, how many
   record a gender, a middle name, an e-mail address), Your names, the hidden.
 
-**The ℹ card.** The ℹ behind a fitting name (or a near miss) says who the
-name is: every entry that writes it (three, then how many more; a pair
+**The ℹ card.** The ℹ behind a fitting name (or a near miss) holds
+everything about it. First how it fits: its width and offset against the bar,
+the page's verdict, why a near miss is kept, and for a pair the whole name and
+which bar holds the other half. Then who it is: every entry that writes it (three, then how many more; a pair
 reading's one person), as its list records it — the full name (title, first,
 middle, last, suffix), its other spellings and nickname, *Woman* or *Man*
 where the list records a gender, the list, its e-mail addresses, its note,
-its address-book page and a link to its Wikipedia section (a new tab).
+its address-book page and a link to its Wikipedia section (a new tab). An
+address the list has cut off at the page's edge is shown marked *cut off*.
 Hovering the ℹ opens the card, which stays while the pointer is on it so its
 links can be followed. A click on the ℹ (a tap, Enter) pins it until Escape,
 a click elsewhere or another click on the ℹ; from the keyboard the focus moves
@@ -367,7 +373,7 @@ into it, and Escape gives it back to the ℹ. The card hangs in the panel
 (`#rm-info-card`, outside the scrolling body), under its ℹ or — with more room
 there — above it, follows its name when the list is drawn again and closes
 when the name is gone, the body scrolls it out of view, or the panel hides.
-The rest of the row keeps its tooltip (width, verdict, list).
+The row itself has no tooltip.
 
 The panel is as wide as its left edge is dragged (double-click for the
 default); on a screen under 769 px it is a sheet docked at the bottom, as tall
@@ -435,8 +441,8 @@ kept.
   name* on `names.json`), the lists (entries' new fields, a middle name not
   written twice, `names.json` filled only where it says so, every
   address-book link a page and every Wikipedia link a section of the list),
-  the gender filter, and the ℹ card (an entry's full name, other spellings
-  and links, every entry behind a name, a pair's one person, a list's text
+  the gender filter, and the ℹ card (cut-off addresses kept out of the
+  formats, an entry's full name, other spellings and links, how a reading fits, every entry behind a name, a pair's one person, a list's text
   never markup).
 
 ## Dependencies

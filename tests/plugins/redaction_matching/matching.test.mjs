@@ -575,7 +575,8 @@ test('the ℹ card: an entry\'s full name, its other spellings, its links', () =
   assert.equal(nameEntryFull(nameEntry({ first: [], last: ['Aspen Club'] })), 'Aspen Club');
   assert.deepEqual(nameEntryAlso(nameEntry({ first: ['David'], last: ['Howell', 'Evans'], nickname: 'The Edge' })), ['David Evans', '“The Edge”']);
   assert.deepEqual(nameEntryAlso(nameEntry({ first: ['Elizabeth', 'Libit'], last: ['Johnson'], nickname: 'Libit' })), ['Libit Johnson'], 'a nickname that is a spelling already');
-  assert.deepEqual(nameEntryLinks(jeffrey), [{ kind: 'book', text: 'Address book, page 64' }]);
+  assert.deepEqual(nameEntryLinks(jeffrey), [{ kind: 'book', text: 'Address book, page 64', href: `${NAME_ADDRESS_BOOK}#page=64` }]);
+  assert.deepEqual(nameEntryLinks(nameEntry({ last: ['X'], links: { 'adress-book': 'back cover' } })), [{ kind: 'book', text: 'Address book, back cover' }], 'no page: no link');
   // Wikipedia: the link's fragment, or the last name when it is empty; an anchor has no spaces
   const wiki = (last, fragment) => nameEntryLinks(nameEntry({ first: ['A'], last: [last], links: { wiki: fragment } }))[0].href;
   assert.equal(wiki('Dubin', ''), `${NAME_WIKI_LIST}#Dubin`);
@@ -647,7 +648,7 @@ test('the lists\' links: an address-book page is a page, a Wikipedia link a sect
   const links = [...read('names.json'), ...read('contacts-businesses.json')].flatMap(nameEntryLinks);
   assert.ok(links.some(l => l.kind === 'book') && links.some(l => l.kind === 'wiki'));
   for (const l of links) {
-    if (l.kind === 'book') assert.match(l.text, /^Address book, page \d+$/);
+    if (l.kind === 'book') assert.match(`${l.text} ${l.href}`, /^Address book, page (\d+) https:\/\/\S+\.pdf#page=\1$/);
     if (l.kind === 'wiki') assert.match(l.href, /^https:\/\/en\.wikipedia\.org\/wiki\/List_of_people_named_in_the_Epstein_files#[^#\s]+$/);
   }
 });

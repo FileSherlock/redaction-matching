@@ -58,7 +58,9 @@ strings and a line in `NAME_LISTS`):
   contacts book's headings) is not a name and is skipped.
 - `links` — where the entry was read and where to read more, shown in the ℹ
   card. `"adress-book": "p17"` (spelled so in the lists) is the page of the
-  address book. `"wiki"` marks a section of Wikipedia's
+  address book, linked to that page of its PDF
+  ([Jeffrey Epstein's Little Black Book](https://archive.unbarpdf.com/other/Jeffrey%20Epstein%27s%20Little%20Black%20Book.pdf),
+  `#page=17`; `NAME_ADDRESS_BOOK` in `api.js`). `"wiki"` marks a section of Wikipedia's
   [List of people named in the Epstein files](https://en.wikipedia.org/wiki/List_of_people_named_in_the_Epstein_files):
   its anchor is the value, or the entry's first last name when the value is
   empty (`"wiki": ""` on Dershowitz → `#Dershowitz`; `"EdwardEpstein"`,
@@ -364,7 +366,8 @@ which bar holds the other half. Then who it is: every entry that writes it (thre
 reading's one person), as its list records it — the full name (title, first,
 middle, last, suffix), its other spellings and nickname, *Woman* or *Man*
 where the list records a gender, the list, its e-mail addresses, its note,
-its address-book page and a link to its Wikipedia section (a new tab). An
+its address-book page (a link to that page of the book) and a link to its
+Wikipedia section (both open a new tab). An
 address the list has cut off at the page's edge is shown marked *cut off*.
 Hovering the ℹ opens the card, which stays while the pointer is on it so its
 links can be followed. A click on the ℹ (a tap, Enter) pins it until Escape,

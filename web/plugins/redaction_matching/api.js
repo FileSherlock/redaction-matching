@@ -654,6 +654,8 @@ function typedNameEntry(s) {
 // Wikipedia's list: an entry with a `wiki` link has a section there, its id
 // the link's fragment or, when that is empty, the entry's last name.
 const NAME_WIKI_LIST = 'https://en.wikipedia.org/wiki/List_of_people_named_in_the_Epstein_files';
+// The address book an `adress-book` page is of, opened at that page (#page=N).
+const NAME_ADDRESS_BOOK = 'https://archive.unbarpdf.com/other/Jeffrey%20Epstein%27s%20Little%20Black%20Book.pdf';
 
 /** An entry's name as its list records it — title, first, middle, last,
  *  suffix ("Dr Abdul Alianizi", "Jeffrey E. Epstein"); a plain string as it
@@ -681,7 +683,8 @@ function nameEntryAlso(e) {
   return [...new Set(out)];
 }
 
-/** An entry's links to show: { kind, text, href? } — the address-book page,
+/** An entry's links to show: { kind, text, href? } — the address-book page
+ *  (a link to that page of the book's PDF),
  *  the Wikipedia section, and any other link key: an http(s) address as a
  *  link, anything else as text. */
 function nameEntryLinks(e) {
@@ -690,7 +693,9 @@ function nameEntryLinks(e) {
     if (key === 'adress-book' || key === 'address-book') {
       if (!v) continue;
       const page = /^(?:p\.?\s*)?(\d+)$/i.exec(v)?.[1];
-      out.push({ kind: 'book', text: page ? `Address book, page ${page}` : `Address book, ${v}` });
+      out.push(page
+        ? { kind: 'book', text: `Address book, page ${page}`, href: `${NAME_ADDRESS_BOOK}#page=${page}` }
+        : { kind: 'book', text: `Address book, ${v}` });
     } else if (key === 'wiki') {
       const fragment = (v || e.last?.[0] || '').trim().replace(/\s+/g, '_');
       out.push({ kind: 'wiki', text: 'Wikipedia: named in the Epstein files', href: fragment ? `${NAME_WIKI_LIST}#${encodeURIComponent(fragment)}` : NAME_WIKI_LIST });

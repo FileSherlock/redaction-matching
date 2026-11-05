@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..', 'web', 'plugins', 'redaction_matching');   // the plugin's folder
+// Skipped when the plugin is not installed (its folder dragged out of Recto), like every plugin's suite.
+if (!fs.existsSync(path.join(root, 'api.js'))) { console.log('# skip: redaction_matching is not installed'); process.exit(0); }
 
 // ── Viewer globals (api.js touches these at load) ──────────
 globalThis.window = globalThis;
@@ -31,7 +33,9 @@ globalThis.utbState = {
   boxes: [], selectedId: null, editingId: null,
   getBox(id) { return this.boxes.find((b) => b.id === id); },
 };
-globalThis.PDFHooks = { on() {}, emit() {} };
+// the bus records its handlers, so a test can announce another document
+const hooks = {};
+globalThis.PDFHooks = { on(ev, fn) { (hooks[ev] ||= []).push(fn); }, emit(ev, d) { for (const fn of hooks[ev] || []) fn(d); } };
 globalThis.GEO = { docScale: () => 100 * 96 / 72, docPxPerPt: () => 96 / 72, docPtToPx: (pt) => pt * 96 / 72 };
 // The shaper (text_tool's Shaping.widths): a fixed width per string.
 const HB = { Ada: 30.0, Bob: 40.0, 'Cy Dee': 50.0 };
@@ -697,6 +701,189 @@ test('starts-with / ends-with filter takes several letters, case-insensitive', (
 });
 
 let failed = 0;
+test('a font name from the page cannot leave its CSS string (control characters go)', () => {
+  // a PDF's font name /A#0a;background:url(//a.co/x); — a newline ended the
+  // quoted family, and the rest became a declaration that fetched a.co
+  const css = rmFamily({ fontFamily: 'A\n;background:url(//a.co/x);' });
+  assert.ok(!/[\u0000-\u001f\u007f]/.test(css), JSON.stringify(css));
+  assert.match(css, /^font-family:&quot;[^"]*&quot;$/);
+  assert.equal(css.split('&quot;').length, 3, 'one quoted family, nothing after it');
+  assert.equal(rmFamily({ fontFamily: 'Times New Roman' }), 'font-family:&quot;Times New Roman&quot;');
+});
+
+test('hiding a two-bar reading hides every entry that writes it (a list may hold a person twice)', () => {
+  const { A, B } = pairFixture('row');
+  const keep = utbState.boxes; utbState.boxes = [];
+  setNameList('people', [...PERSONS, person('Nadia', 'Marcinkova')]);   // names.json holds Nadia Marcinkova three times
+  utbState.boxes = keep;
+  assert.deepEqual(pairKeys(A), ['pair:Nadia|Marcinkova']);
+  assert.equal(getBoxMatchInfo(A).entries[0].origins.length, 2, 'both entries write the reading');
+  hideMatch(A.id, 'pair:Nadia|Marcinkova');
+  assert.deepEqual(pairKeys(A), [], 'no other entry brings it back');
+  assert.deepEqual(pairKeys(B), []);
+});
+
+const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
+
+test('a name the shaper gave no width fits no bar, and a shaper that fails says so', async () => {
+  // the shaper's 0 for a name it could not measure fitted every bar under the redactor's padding
+  useNames([person('Aaron', 'Kwok'), person(null, 'Ada')]);
+  const box = bar({ w: 5.5, widths: {} });
+  utbState.boxes = [box];
+  await calculateWidthsForRedaction(box.id);
+  assert.deepEqual(box.widths, { Ada: 30.0 }, 'Aaron Kwok has no width, not 0');
+  assert.deepEqual(getBoxMatches(box), []);
+  assert.equal(box.widthError, null);
+  const real = Shaping.widths;
+  Shaping.widths = async () => { throw new Error('fonts.json 404'); };
+  try { await calculateWidthsForRedaction(box.id); } finally { Shaping.widths = real; }
+  assert.deepEqual(box.widths, {});
+  assert.equal(box.widthError, 'fonts.json 404', 'the panel says why nothing was compared');
+});
+
+test('pasting many names is linear, and a name pasted twice is one', () => {
+  useNames([]);
+  const names = Array.from({ length: 30000 }, (_, i) => `Name${i} Last${i}`);
+  const t0 = performance.now();
+  assert.equal(addCustomNames([...names, names[5]]), 30000);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 3000, `${Math.round(ms)} ms`);   // the search per name took ~8 s here at this size
+  assert.equal(addCustomNames(names.slice(0, 10)), 0);
+  useNames([]);
+});
+
+test('only the newest scoring of a bar writes its verdicts', async () => {
+  useNames(WIDTH_PEOPLE);
+  const box = bar();
+  utbState.boxes = [box];
+  let slow = true;
+  globalThis.ocrTestHypothesis = async () => { const was = slow; if (was) await tick(30); return { verdict: was ? 'consistent' : 'contradicted' }; };
+  try {
+    const older = scoreMatches(box);     // the old geometry's scoring, still running …
+    await tick(5);
+    slow = false;
+    await scoreMatches(box);             // … when the bar was judged again
+    await older;
+  } finally { delete globalThis.ocrTestHypothesis; }
+  const v = Object.values(box.verdicts).map(x => x.verdict);
+  assert.ok(v.length && v.every(x => x === 'contradicted'), JSON.stringify(v));
+});
+
+test('another document stops a measurement still running: the old bar gets no widths and no label', async () => {
+  useNames(WIDTH_PEOPLE);
+  const box = bar({ widths: undefined, text: 'untouched' });
+  utbState.boxes = [box];
+  const real = Shaping.widths;
+  let release;
+  const gate = new Promise(r => { release = r; });
+  Shaping.widths = async body => { await gate; return real(body); };
+  try {
+    const run = calculateWidthsForRedaction(box.id);
+    await tick();
+    PDFHooks.emit('document:opening', {});
+    utbState.boxes = [];                  // the core resets the boxes
+    release();
+    await run;
+  } finally { Shaping.widths = real; }
+  assert.equal(box.widths, undefined);
+  assert.equal(box.text, 'untouched');
+});
+
+test('a bar whose ink runs to the text column\'s edge bounds no narrower name', () => {
+  useNames(WIDTH_PEOPLE);
+  const margin = right => ({ exact: false, source: 'ocr', left: { kind: 'word' }, right: null, margin: { left: false, right } });
+  const box = bar({ w: 140, refineInfo: margin(true) });
+  assert.equal(fitRange(box).under, Infinity);
+  assert.ok(getBoxMatches(box).includes('Woody Allen'), 'a name 23 px short may end anywhere before the margin');
+  assert.ok(!getBoxMatches(bar({ w: 140, refineInfo: margin(false) })).includes('Woody Allen'));
+});
+
+test('the space is settled in the bar\'s own face, again when the bar changes, never over the user\'s', async () => {
+  const span = { id: 's1', type: 'embedded', lineId: 'L1', fontFamily: 'Verdana', bold: false, italic: false, sizePt: 12,
+    baseCharPositions: [{ c: 'a', w: 7 }, { c: ' ', w: 5.625 }, { c: 'b', w: 7 }, { c: ' ', w: 5.625 }] };
+  const box = bar({ lineId: 'L1', fontFamily: 'Verdana', bold: true, italic: false, sizePt: 12, kerning: false });
+  utbState.boxes = [span, box];
+  globalThis.getNaturalSpaceWidth = async q => (q.bold ? 5.469 : 5.625) * q.sizePt / 12;
+  try {
+    await settleSpaceWidth(box);
+    assert.equal(box.spaceWidth, 5.469, 'a bold bar on a regular line: the bold face\'s space');
+    box.sizePt = 14;
+    await settleSpaceWidth(box);
+    assert.ok(Math.abs(box.spaceWidth - 5.469 * 14 / 12) < 1e-9, `${box.spaceWidth}`);
+    box.spaceWidth = 9;                   // set by hand
+    box.bold = false;
+    await settleSpaceWidth(box);
+    assert.equal(box.spaceWidth, 9);
+    // a justified line: the bar's own space plus what justification added to the line's
+    const wide = { ...span, id: 's2', lineId: 'L2', baseCharPositions: [{ c: ' ', w: 8.625 }, { c: ' ', w: 8.625 }] };
+    const j = bar({ lineId: 'L2', fontFamily: 'Verdana', bold: true, sizePt: 12, kerning: false });
+    utbState.boxes = [wide, j];
+    await settleSpaceWidth(j);
+    assert.ok(Math.abs(j.spaceWidth - (5.469 + 3)) < 1e-9, `${j.spaceWidth}`);
+  } finally { delete globalThis.getNaturalSpaceWidth; }
+});
+
+test('a near miss is never written on the page unless pinned; an unjudged label is grey, not green', () => {
+  useNames(WIDTH_PEOPLE);
+  const box = bar({ w: 123 });                       // nothing within the lattice, three near misses within ±3 px
+  box.refineInfo = exactInfo(box);
+  utbState.boxes = [box];
+  assert.equal(getBoxMatchInfo(box).loose, true);
+  labelBar(box);
+  assert.equal(box.text, '', 'a loose list writes nothing on the bar');
+  box.matchPick = 'Nicki Haskell';
+  labelBar(box);
+  assert.equal(box.text, 'Nicki Haskell', 'the user pinned it');
+  // with a tester on the page, a label it has not judged is grey
+  const fit = bar();
+  utbState.boxes = [fit];
+  globalThis.ocrTestHypothesis = async () => ({ verdict: 'consistent' });
+  try {
+    labelBar(fit);
+    assert.equal(fit.labelColor, UNJUDGED_COLOR);
+  } finally { delete globalThis.ocrTestHypothesis; }
+  labelBar(fit);
+  assert.equal(fit.labelColor, null, 'without a tester: the type\'s colour');
+});
+
+test('names a wider tolerance lets in are judged before the bar is labelled with them', async () => {
+  useNames([person(null, 'Ada'), person(null, 'Bob'), person('Cy', 'Dee')]);
+  const box = bar({ w: 40, tolerance: 0.5, widths: {} });
+  utbState.boxes = [box];
+  const judged = [];
+  globalThis.ocrTestHypothesis = async (b, name) => { judged.push(name); return { verdict: 'consistent' }; };
+  try {
+    await calculateWidthsForRedaction(box.id);
+    assert.deepEqual(judged, ['Bob']);
+    box.tolerance = 10.5;                 // the Text panel's field: a relabel only
+    updateAllMatchesView(box.id);
+    await tick(); await tick();
+    assert.deepEqual(judged.sort(), ['Ada', 'Bob', 'Cy Dee']);
+    assert.equal(box.verdicts['Cy Dee'].verdict, 'consistent');
+  } finally { delete globalThis.ocrTestHypothesis; }
+});
+
+test('a substitute face is said, and a name the face cannot draw is not compared', async () => {
+  useNames([person(null, 'Ada'), person(null, 'Bob')], ['王小明']);
+  const box = bar({ fontFamily: 'Garamond', widths: {} });
+  utbState.boxes = [box];
+  const real = Shaping.widths;
+  Shaping.widths = async body => ({
+    results: body.strings.map(s => ({ width: HB[s] ?? 37.34, missing: /[^\x00-\x7f]/.test(s) ? [...s] : [] })),
+    face: body.report ? { file: 'times.ttf', family: 'Times New Roman', style: 'regular', substitute: true } : undefined,
+  });
+  try { await calculateWidthsForRedaction(box.id); } finally { Shaping.widths = real; }
+  assert.ok(!('王小明' in box.widths), 'no width from the placeholder glyph');
+  assert.equal(box.unshaped, 1);
+  assert.equal(rmSubstitute(box), 'Garamond is not installed');
+  assert.match(rmBarTitle(box), /measured with HarfBuzz in Times New Roman — Garamond is not installed/);
+  box.bold = true; box.fontFamily = 'Times New Roman';
+  box.shapedFace = { file: 'times.ttf', family: 'Times New Roman', style: 'regular', substitute: true };
+  assert.equal(rmSubstitute(box), 'Times New Roman has no bold face installed');
+  box.widthFace = 'times12';              // the page's own face measured: no substitute to speak of
+  assert.equal(rmSubstitute(box), null);
+});
+
 for (const t of tests) {
   try {
     await t.fn();

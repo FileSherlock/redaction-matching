@@ -87,8 +87,11 @@ words before it the first (`Lex Wexner`; `Ghislaine de Rothschild` is first
 with an `@` is written as typed. Adding a name switches Your names on.
 
 The eye button on a fitting name **hides** the entry behind it from every
-bar — a whole person, with all their spellings; a typed name simply leaves
-Your names. *Show again* (Names section) brings the hidden back.
+bar — a whole person, with all their spellings, and every entry that writes
+the same reading (`names.json` holds a few people twice or three times; a
+two-bar reading hid only the first); a typed name simply leaves Your names.
+*Show again* (Names section) brings the hidden back. Pasting is linear: 60,000
+names go in in a fraction of a second.
 
 `state.namesData` holds every entry of the shipped lists as the files have
 them, and `state.customCandidates` Your names as typed: a refiner reads both
@@ -243,6 +246,27 @@ cannot draw keeps its HarfBuzz width. The two agree to the font unit on the
 memos; they differ where a document was set in another build of the face
 (tol0 LAWS §6).
 
+**What could not be measured is never a width.** The shaper is asked to
+report (`report: true`): the face it measured with, and the characters each
+name has no glyph for. A name it gave no width, or one with a character the
+face lacks (`王小明` in Times "fitted" at its placeholder glyph's 37.34 px), is
+not compared — the panel says how many. A face that stands in for the bar's
+(`Garamond` is not installed, `Nimbus Mono PS` has no bold) gets a warning
+chip, `≈ Times New Roman`, and the width's tooltip says why; the page's own
+face, where a reader measured, needs none. When nothing could be measured at
+all — a font that failed to load — the panel says so with the reason
+(`box.widthError`), never *No name fits*; a bar not measured yet says
+*Measuring…* and is measured. The shaper takes the names in batches of 1,500
+and every bar's pass a task of its own, the shown page's bars first, so the
+page answers while a document's bars are measured.
+
+**The space inside a name** (`settleSpaceWidth`) is the line's: the font's
+own space where the line is not justified, the measured one where it is. It
+is the **bar's own face's** space, plus what justification added to the
+line's: a bold bar on a regular Verdana line takes the bold face's 5.469 px,
+not the regular 5.625. It is settled again when the bar's face, size, line or
+kerning changes; a space set by hand in the Text panel stays.
+
 ## Which names fit
 
 A name fits when its measured width lies within the bar's **fit range**:
@@ -259,9 +283,11 @@ A name fits when its measured width lies within the bar's **fit range**:
   `refineInfo.left/right.kind === 'ink'` — or no refiner at all) — in which
   case the bar ends where the black box ends, and the redactor drew that box
   with room to spare (4.4 px past *BLEDSOE* on the reference page). Then a
-  name may be narrower by up to 0.4 em, capped at 10 px. The chip names what
-  bounds the bar where no pen does (`· ink right`, `· right margin`), and its
-  tooltip says why.
+  name may be narrower by up to 0.4 em, capped at 10 px. A side whose ink
+  reaches the text column's edge runs to the **margin** (`refineInfo.margin`):
+  the name may end anywhere before it, so no narrower name is too narrow. The
+  chip names what bounds the bar where no pen does (`· ink right`,
+  `· right margin`), and its tooltip says why.
 
 Names are listed best first: by **page verdict** when a hypothesis tester
 scored them (below), then a pair reading before a single one, then a fit
@@ -278,7 +304,10 @@ kept *Richard Barnett* in view while HarfBuzz still formed the `tt` ligature
 that put it 0.51 px short of its pen-exact bar. The others wait folded under
 *n near misses*. Without a tester they are the fallback when nothing fits at
 all, shown under a red *No name fits the pen-exact width* note as near
-misses, never as fits.
+misses, never as fits — and nothing is written on the bar from such a list
+unless the user pins one of its names. A tolerance changed in the Text panel
+lets other names in without a new measurement: those the page has not
+judged are judged then, and the bar labelled again.
 
 ## Page-pixel verdicts
 
@@ -288,8 +317,11 @@ after each width recompute and the name carries the verdict: `✓` consistent,
 `✗` contradicted (struck through), `–` no evidence. The label drawn on the bar
 takes the same verdict's colour (`box.labelColor`, a `text_tool` seam the SVG
 text and the pixel view both honour): green when the page vouched for the
-name, amber when it left no evidence, red when it contradicted it; a bar
-without a verdict keeps the type's colour. The label sits on the edge the
+name, amber when it left no evidence, red when it contradicted it; a label
+the tester has not judged (yet) is grey — the type's own colour is a green
+too close to "vouched" — and without a tester the label keeps the type's
+colour. Only the newest scoring of a bar writes its verdicts: one still
+running for the bar's old geometry, finishing later, is dropped. The label sits on the edge the
 refiner knows exactly (`box.labelAlign`, the same kind of seam): a name that
 ends at a comma or a word's pen but starts somewhere after a tab stop is drawn
 ending at the bar's right edge. The seam draws the name where the refiner put
@@ -403,15 +435,20 @@ kept.
   `api.js` through `assetURL`.
 - Reads `utbState.boxes` (text_tool) and writes `box.text` / `box.labelText`,
   `box.labelColor`, `box.labelAlign`, `box.widths`, `box.widthFace`,
-  `box.verdicts`, `box.matchPick`, `box.nameSettings`, `box.candidates`.
-- Listens to **`redaction:refined`** (remnant letters → letter filter).
+  `box.widthError`, `box.shapedFace`, `box.unshaped`, `box.verdicts`,
+  `box.matchPick`, `box.nameSettings`, `box.candidates`.
+- Listens to **`redaction:refined`** (remnant letters → letter filter) and
+  **`document:opening`**: a measurement or scoring still running for the old
+  document's bars stops, and nothing of it is written or drawn (its labelled
+  bar used to land on the next document's page 1). A bar no longer in
+  `utbState` is never labelled.
 - Reads **`box.refineInfo`** (`exact`, `left` / `right`, `blocked`) when a
   refiner wrote it; without one every bar is a raster bar with detector edges.
 - Calls **`window.ocrTestHypothesis`** and **`window.ocrMeasureWidths`** when
   defined; **`Shaping.widths`**, **`getNaturalSpaceWidth`**,
   **`renderBox`**, **`GEO`**, **`selectBoxInSVG`** / **`syncToolbarToBox`**
   through guards.
-- Globals Recto calls by name: `createNewRedaction`, `handleManualAddBox`,
+- Globals Recto calls by name: `createNewRedaction` (text_tool's Add Box tool),
   `calculateWidthsForRedaction`, `calculateAllWidths`, `selectRedaction`,
   `updateAllMatchesView`, `renderCandidates`, `syncNameSettingsUI`. Others it
   exposes: `getBoxMatchInfo`, `getBoxMatches`, `fitRange`,

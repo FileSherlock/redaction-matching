@@ -756,8 +756,11 @@ const splitNames = text => String(text).split(/[\n,]/).map(s => s.trim()).filter
 /** Add names to Your names (shared by every bar); returns how many were new. */
 function addCustomNames(names) {
   let added = 0;
+  // (a set, not a search of the list per name: 60,000 pasted names took 50 s)
+  const have = new Set(state.customCandidates);
   for (const n of names) {
-    if (state.customCandidates.includes(n)) continue;
+    if (have.has(n)) continue;
+    have.add(n);
     state.customCandidates.push(n);
     added++;
   }
@@ -790,7 +793,7 @@ function hideMatch(boxId, key) {
   if (!box) return;
   const info = getBoxMatchInfo(box);
   const e = [...info.entries, ...info.near].find(x => x.key === key);
-  hideNameEntries(e?.kind === 'pair' ? [e.origin] : barNames(box).names.get(key));
+  hideNameEntries(e?.kind === 'pair' ? (e.origins || [e.origin]) : barNames(box).names.get(key));
 }
 
 async function fetchNameList(file) {
@@ -980,8 +983,22 @@ window.PDFHooks?.on('redaction:refined', ({ boxId, remnants } = {}) => {
 
 // ── Width calculation ───────────────────────────────────────
 
+// A task of its own for each piece of a long job — a bar, a batch of names —
+// so the page answers while every bar of a document is measured (200 bars
+// with 2,320 names were 11.7 s without a pause).
+const rmYield = () => new Promise(resolve => setTimeout(resolve, 0));
+
 async function calculateAllWidths() {
-  for (const box of getRedactionBoxes()) await calculateWidthsForRedaction(box.id, { label: false });
+  // a newer pass over every bar takes over from an older one; the shown
+  // page's bars go first
+  const run = calculateAllWidths.run = (calculateAllWidths.run || 0) + 1;
+  const page = state.currentPage;
+  const boxes = getRedactionBoxes().sort((a, b) => (a.page === page ? 0 : 1) - (b.page === page ? 0 : 1));
+  for (const box of boxes) {
+    await calculateWidthsForRedaction(box.id, { label: false });
+    await rmYield();
+    if (run !== calculateAllWidths.run) return;
+  }
   updateAllMatchesView(null);
 }
 
@@ -1002,8 +1019,23 @@ const JUSTIFY_SPACE_TOL_FLOOR_PX = 0.5;
 // is justified and takes the measured median. The natural advance is taken
 // at the line's own face and size (from its embedded spans), so a size
 // mismatch cannot skew the comparison.
-async function settleSpaceWidth(box) {
-  if (!box.lineId || (box.spaceWidth != null && box.defaultSpaceWidth === false)) return;
+//
+// It is settled again when the bar's face, size or line changes (a space set
+// here for a 12 pt regular bar stayed after the bar became 14 pt bold); a
+// space the user set by hand stays. And the space between a name's words is
+// the bar's face's: a bold bar on a regular line takes the bold face's own
+// advance, plus whatever justification added to the line's (Verdana's bold
+// space is 5.469 px where the regular is 5.625).
+const _settledSpace = new WeakMap();   // bar → { key, w }: the space this plugin set, and for what
+const spaceKey = box => `${box.lineId}|${box.fontFamily}|${!!box.bold}|${!!box.italic}|${box.sizePt}|${!!box.kerning}`;
+// `stale`: the caller's "this measurement is no longer wanted" — another
+// document opened meanwhile: nothing is written, nothing drawn.
+async function settleSpaceWidth(box, stale = () => !rmLive(box)) {
+  if (!box.lineId) return;
+  if (box.spaceWidth != null && box.defaultSpaceWidth === false) {
+    const mine = _settledSpace.get(box);
+    if (!mine || mine.w !== box.spaceWidth || mine.key === spaceKey(box)) return;   // the user's, or still right
+  }
   const lineSpans = utbState.boxes.filter(b => b.lineId === box.lineId && b.type === 'embedded' && b.baseCharPositions);
   const detected = lineSpans
     .flatMap(b => b.baseCharPositions.filter(cp => cp.c === ' '))
@@ -1022,18 +1054,28 @@ async function settleSpaceWidth(box) {
   const natural = typeof getNaturalSpaceWidth === 'function'
     ? await getNaturalSpaceWidth({ fontFamily: lineFont, sizePt, kerning: box.kerning })
     : null;
+  // the bar's own face, where it is not the line's: its space, at its size
+  const span0 = lineSpans[0];
+  const sameFace = !span0 || (span0.fontFamily === box.fontFamily && !!span0.bold === !!box.bold && !!span0.italic === !!box.italic);
+  const sameSize = !(box.sizePt > 0) || !(rawSizePt > 0) || Math.abs(box.sizePt - rawSizePt) < 0.5;
+  const own = natural == null || (sameFace && sameSize) ? natural
+    : await getNaturalSpaceWidth({ fontFamily: box.fontFamily, bold: !!box.bold, italic: !!box.italic,
+        sizePt: Math.round(box.sizePt), kerning: box.kerning });
   let spaceW;
   if (natural != null) {
     const tol = Math.max(JUSTIFY_SPACE_TOL_FLOOR_PX, natural * JUSTIFY_SPACE_TOL_FRAC);
     const real = detected.filter(w => w >= natural - tol);
     const typical = real.length ? _median(real) : natural;
-    spaceW = typical > natural + tol ? typical : natural;
+    const stretch = typical > natural + tol ? typical - natural : 0;   // what justification added
+    spaceW = (own ?? natural) + stretch;
   } else {
     spaceW = _median(detected);   // no HarfBuzz reference: the robust raw median
   }
+  if (stale()) return;
   box.spaceWidth = spaceW;
   box.defaultSpaceWidth = false;
-  box.nativeSpaceWidth = natural != null ? natural : _median(detected);
+  box.nativeSpaceWidth = natural != null ? (own ?? natural) : _median(detected);
+  _settledSpace.set(box, { key: spaceKey(box), w: spaceW });
   if (typeof renderBox === 'function') renderBox(box);
   if (typeof syncToolbarToBox === 'function' && utbState.selectedId === box.id) syncToolbarToBox(box);
 }
@@ -1046,11 +1088,20 @@ async function settleSpaceWidth(box) {
 // ff / tt ligatures would put such a name half a pixel short of its bar.
 // Then, where a reader has read the row, the optional ocrMeasureWidths lays
 // the names out in the face that drew the page, and its widths win (a name
-// its glyph set cannot draw keeps the HarfBuzz width). → { widths, face }
+// its glyph set cannot draw keeps the HarfBuzz width). A name gets no width
+// rather than a wrong one: the shaper's 0 for a name it could not measure
+// fitted every bar narrower than the redactor's padding (a 5.5 px bar fitted
+// all 2,885 names), and a font that failed to load said "No name fits" on
+// every bar. The shaper says which face measured (`shaped`: a substitute
+// when the bar's family or style is not installed — Garamond measured in
+// Times New Roman said nothing) and which characters it has no glyph for: a
+// name it cannot draw gets no width ("王小明" in Times "fitted" at the
+// placeholder's 37.34 px). → { widths, face, error, shaped, unshaped }
+const RM_SHAPE_BATCH = 1500;   // names per shaping call: a task of ~40 ms
 async function measureNames(box, strings) {
   const widths = {};
-  let face = null;
-  if (!strings.length) return { widths, face };
+  let face = null, error = null, shaped = null, unshaped = 0;
+  if (!strings.length) return { widths, face, error, shaped, unshaped };
   // letter-spacing (rare on redactions) adds a fixed advance between every
   // pair of glyphs; the shaper does not model it, so it is folded in
   const lsPx = box.letterSpacing ? box.letterSpacing * GEO.docPtToPx(box.sizePt) : 0;
@@ -1058,20 +1109,33 @@ async function measureNames(box, strings) {
   // a manual Space W. replaces the font's own space advance between words
   const manualSpace = box.spaceWidth != null && box.defaultSpaceWidth === false;
   try {
-    const data = typeof Shaping !== 'undefined' ? await Shaping.widths({
-      strings: strings.map(c => caseName(box, c)),   // as the bar writes them
-      family: box.fontFamily,
-      bold: !!box.bold,
-      italic: !!box.italic,
-      size: box.sizePt,          // POINTS — the shaper applies the DPI scale
-      scale: GEO.docScale(),     // px-per-pt × 100 for this document
-      kerning: box.kerning,
-      ligatures: false,
-      space_width: manualSpace ? box.spaceWidth : null,
-    }) : null;
-    if (data) strings.forEach((c, i) => { widths[c] = spaced(c, data.results?.[i]?.width ?? 0); });
+    if (typeof Shaping === 'undefined') error = 'no shaper on the page';
+    for (let k = 0; !error && k < strings.length; k += RM_SHAPE_BATCH) {
+      if (k) await rmYield();
+      const part = strings.slice(k, k + RM_SHAPE_BATCH);
+      const data = await Shaping.widths({
+        strings: part.map(c => caseName(box, c)),   // as the bar writes them
+        family: box.fontFamily,
+        bold: !!box.bold,
+        italic: !!box.italic,
+        size: box.sizePt,          // POINTS — the shaper applies the DPI scale
+        scale: GEO.docScale(),     // px-per-pt × 100 for this document
+        kerning: box.kerning,
+        ligatures: false,
+        space_width: manualSpace ? box.spaceWidth : null,
+        report: true,
+      });
+      shaped ||= data?.face || null;
+      part.forEach((c, i) => {
+        const r = data?.results?.[i], w = r?.width;
+        if (r?.error) error ||= String(r.error);
+        else if (r?.missing?.length) unshaped++;
+        else if (Number.isFinite(w) && w > 0) widths[c] = spaced(c, w);
+      });
+    }
   } catch (e) {
     console.warn('[redaction_matching] candidate widths failed', e);
+    error = String(e?.message || e);
   }
   if (typeof ocrMeasureWidths === 'function') {
     try {
@@ -1084,8 +1148,22 @@ async function measureNames(box, strings) {
       console.warn('[redaction_matching] page-face widths failed', e);
     }
   }
-  return { widths, face };
+  if (Object.keys(widths).length) error = null;   // what was measured counts; a failure is the case of none
+  return { widths, face, error, shaped, unshaped };
 }
+
+// The open document's generation: work still running for another document's
+// bars (a measurement, a scoring) stops when it finds a newer one, and draws
+// nothing — its bar was labelled onto the next document's page 1.
+let rmDocGen = 0;
+window.PDFHooks?.on('document:opening', () => {
+  rmDocGen++;
+  rmUi.measuring.clear();
+  _measureSoon.clear();
+  clearTimeout(rmUi.timers.settings);
+});
+// a bar still in the model (not another document's, not deleted)
+const rmLive = box => typeof utbState === 'undefined' || utbState.getBox(box.id) === box;
 
 const _measureSeq = new WeakMap();    // bar → its latest measurement; an older one finishing later is dropped
 const _measuredKey = new WeakMap();   // bar → the names its widths were measured for
@@ -1098,10 +1176,11 @@ async function calculateWidthsForRedaction(boxId, { label = true } = {}) {
   if (!box || box.type !== 'redaction') return;
   const seq = (_measureSeq.get(box) || 0) + 1;
   _measureSeq.set(box, seq);
-  const stale = () => _measureSeq.get(box) !== seq;
+  const gen = rmDocGen;
+  const stale = () => _measureSeq.get(box) !== seq || gen !== rmDocGen || !rmLive(box);
   rmUi.measuring.add(box.id);
   try {
-    try { await settleSpaceWidth(box); }
+    try { await settleSpaceWidth(box, stale); }
     catch (e) { console.warn('[redaction_matching] space width failed', e); }
     if (stale()) return;
     const { key, list } = barNames(box);
@@ -1109,10 +1188,13 @@ async function calculateWidthsForRedaction(boxId, { label = true } = {}) {
     // every person measured, so the pair readings can be judged bar by bar.
     const link = linkFor(box);
     const strings = [...new Set([...list, ...(link ? halfStrings(box, link) : [])])];
-    const { widths, face } = await measureNames(box, strings);
+    const { widths, face, error, shaped, unshaped } = await measureNames(box, strings);
     if (stale()) return;
     box.widths = widths;
     box.widthFace = face;
+    box.widthError = error;
+    box.shapedFace = shaped;
+    box.unshaped = unshaped;
     _measuredKey.set(box, key);
     await scoreMatches(box);
     if (stale()) return;
@@ -1173,9 +1255,13 @@ function effectiveTolerance(box) {
 // detector's.
 const DETECTOR_PAD_EM = 0.4;
 const DETECTOR_PAD_MAX_PX = 10;
+// A side whose ink reaches the text column's edge (refineInfo.margin) runs to
+// the margin: the name may end anywhere before it, so no narrower name is too
+// narrow (the padding cap used to apply, against the chip's own tooltip).
 function fitRange(box) {
   const over = effectiveTolerance(box);
   const i = box.refineInfo;
+  if (i?.margin?.left || i?.margin?.right) return { over, under: Infinity };
   const detectorEdge = !i || !i.left || !i.right || i.left.kind === 'ink' || i.right.kind === 'ink';
   const pad = Math.min(DETECTOR_PAD_MAX_PX, DETECTOR_PAD_EM * emPx(box));
   return { over, under: detectorEdge ? Math.max(over, pad) : over };
@@ -1291,7 +1377,7 @@ function pairPersons(A, B) {
   const splits = variants.map(nameVariantHalves).filter(Boolean);
   const uses = nameUses(variants);
   const aliases = { first: sA.aliases.first || sB.aliases.first, last: sA.aliases.last || sB.aliases.last };
-  const out = [], seen = new Set();
+  const out = [], seen = new Map();
   for (const list of splits.length ? state.nameLists : []) {
     if (!list.on) continue;
     list.entries.forEach((e, i) => {
@@ -1300,9 +1386,14 @@ function pairPersons(A, B) {
       for (const v of nameSpellings(e, aliases, uses)) for (const [l, r] of splits) {
         const first = nameFromPattern(l, v), last = nameFromPattern(r, v);
         if (!first || !last || !matchesLetterFilter(first, sA) || !matchesLetterFilter(last, sB)) continue;
-        if (seen.has(`${first}|${last}`)) continue;
-        seen.add(`${first}|${last}`);
-        out.push({ first, last, origin: { list: list.id, index: i } });
+        const origin = { list: list.id, index: i };
+        // one reading per spelling; a list that holds the person twice
+        // (names.json does) gives it every entry, so hiding it hides them all
+        const had = seen.get(`${first}|${last}`);
+        if (had) { if (!had.origins.some(o => o.list === origin.list && o.index === origin.index)) had.origins.push(origin); continue; }
+        const p = { first, last, origin, origins: [origin] };
+        seen.set(`${first}|${last}`, p);
+        out.push(p);
       }
     });
   }
@@ -1336,7 +1427,7 @@ function pairReadings(box, link = linkFor(box)) {
       key: `pair:${p.first}|${p.last}`, kind: 'pair', full: `${p.first} ${p.last}`, first: p.first, last: p.last,
       name: mine ? p.first : p.last, partnerName: mine ? p.last : p.first,
       partnerId: link.other.id, link: link.kind, diff: Math.max(Math.abs(wa - A.w), Math.abs(wb - B.w)),
-      origin: p.origin,
+      origin: p.origin, origins: p.origins,
     });
   }
   return out;
@@ -1413,16 +1504,27 @@ function getBoxMatches(box) {
 // pair's half on its own bar, so the halves are judged independently and
 // never summed across the gap. Verdicts live on box.verdicts and are made
 // again with the widths; without a provider nothing runs.
-async function scoreMatches(box) {
-  box.verdicts = null;
+// Only the newest scoring of a bar writes its verdicts: an older one that
+// finishes later (the bar moved and was measured again meanwhile) used to
+// leave the old geometry's verdicts on it. `keep`: the bar is where it was —
+// only the names not judged yet are tested (a wider tolerance let them in).
+const _scoreSeq = new WeakMap();
+async function scoreMatches(box, { keep = false } = {}) {
+  const seq = (_scoreSeq.get(box) || 0) + 1;
+  _scoreSeq.set(box, seq);
+  const gen = rmDocGen;
+  const current = () => _scoreSeq.get(box) === seq && gen === rmDocGen;
+  if (!keep) box.verdicts = null;
   if (typeof ocrTestHypothesis !== 'function') return;
   const { entries, near } = getBoxMatchInfo(box);
-  const verdicts = {};
+  const verdicts = keep ? { ...(box.verdicts || {}) } : {};
   for (const name of new Set([...entries, ...near].map(e => e.name))) {
+    if (keep && name in verdicts) continue;
     try { verdicts[name] = await ocrTestHypothesis(box, name); }
     catch (e) { console.warn('[redaction_matching] hypothesis test failed for', name, e); verdicts[name] = null; }
+    if (!current()) return;
   }
-  box.verdicts = verdicts;
+  if (current()) box.verdicts = verdicts;
 }
 
 const asEntry = e => (typeof e === 'string' ? { key: e, kind: 'single', name: e, full: e } : e);
@@ -1494,19 +1596,25 @@ const VERDICT_MARK = { consistent: '✓', contradicted: '✗', 'no-evidence': '�
 // pixels vouched for the name, left no evidence, or contradicted it. A bar
 // without a verdict keeps the type's colour.
 const VERDICT_COLOR = { consistent: '#3ddc84', 'no-evidence': '#fdd663', contradicted: '#f28b82' };
+// A label the tester has not judged (yet), with a tester on the page: grey —
+// the type's own colour is a green too close to "the page vouched".
+const UNJUDGED_COLOR = '#dadce0';
 
 /** Label a bar with its shown reading, as the bar writes it, in the colour of
  *  its verdict, on the edge the refiner knows exactly: a name that ends at a
  *  comma or a word's pen but starts somewhere after a tab stop is drawn
  *  ending at the bar's right edge (text_tool's labelAlign). */
 function labelBar(box) {
-  const { entries } = getBoxMatchInfo(box);
-  const { name: shown, index } = shownMatch(box, entries);
-  const label = shown ? caseName(box, shown) : '';
+  if (!rmLive(box)) return;
+  const { entries, loose } = getBoxMatchInfo(box);
+  const { name: shown, index, entry } = shownMatch(box, entries);
+  // a near miss is no fit: a loose list writes nothing on the page, unless
+  // the user pinned one of its names
+  const label = shown && (!loose || box.matchPick === entry.key) ? caseName(box, shown) : '';
   box.text = label;
   box.labelText = label;
-  const v = index >= 0 && entries[index] ? entryVerdict(box, entries[index]) : null;
-  box.labelColor = (v && VERDICT_COLOR[v]) || null;
+  const v = label && index >= 0 && entries[index] ? entryVerdict(box, entries[index]) : null;
+  box.labelColor = (v && VERDICT_COLOR[v]) || (label && typeof ocrTestHypothesis === 'function' ? UNJUDGED_COLOR : null);
   const ri = box.refineInfo;
   const pen = s => !!s && s.kind !== 'ink' && s.kind !== 'margin';
   box.labelAlign = ri && pen(ri.right) && !pen(ri.left) ? 'right' : 'left';
@@ -1516,10 +1624,35 @@ function labelBar(box) {
 /** Relabel every bar — or one, and the bar it forms a name with — and redraw
  *  the selected bar's fits. Recto calls this after a bar moves, resizes, or
  *  comes back from undo. */
+// Names a bar shows that the page has not judged — a wider tolerance let them
+// in, and only a relabel followed — are judged, and the bar labelled again.
+function unjudged(box) {
+  if (typeof ocrTestHypothesis !== 'function' || rmUi.measuring.has(box.id) || _measuredKey.get(box) !== barNames(box).key) return false;
+  const { entries, near } = getBoxMatchInfo(box), v = box.verdicts || {};
+  return [...entries, ...near].some(e => !(e.name in v));
+}
+const _scoreSoon = new Set();
+function rmScoreSoon(id) {
+  if (_scoreSoon.has(id)) return;
+  _scoreSoon.add(id);
+  setTimeout(async () => {
+    _scoreSoon.delete(id);
+    const box = typeof utbState !== 'undefined' ? utbState.getBox(id) : null;
+    if (!box || rmUi.measuring.has(id)) return;
+    await scoreMatches(box, { keep: true });
+    if (!rmLive(box)) return;
+    labelBar(box);
+    const other = linkFor(box)?.other;
+    if (other) labelBar(other);
+    if (utbState.selectedId === id || other?.id === utbState.selectedId) rmRenderBar();
+  }, 0);
+}
+
 function updateAllMatchesView(onlyId = null) {
   for (const box of getRedactionBoxes()) {
     if (onlyId !== null && onlyId !== box.id) continue;
     labelBar(box);
+    if (unjudged(box)) rmScoreSoon(box.id);
     if (onlyId !== null) {
       const link = linkFor(box);
       if (link) labelBar(link.other);
@@ -1557,13 +1690,6 @@ async function selectRedaction(boxId) {
   rmUi.pill = null;   // another bar's formats: the pill selected was one of the last bar's
   labelBar(box);
   rmRenderPanel();
-}
-
-function handleManualAddBox(pageNum, pxX, pxY) {
-  const nearestLine = typeof utbFindNearestLine === 'function' ? utbFindNearestLine(pageNum, pxY, 2.0) : null;
-  const finalY = nearestLine ? nearestLine.y : pxY;
-  const finalH = nearestLine ? nearestLine.h : 20;
-  createNewRedaction(pageNum, pxX - 50, finalY, 100, finalH, nearestLine?.lineId ?? null, nearestLine?.font, nearestLine?.sizePt);
 }
 
 function createNewRedaction(pageNum, x, y, width, height, lineId = null, lineFont = null, lineSizePt = null) {
@@ -1621,7 +1747,11 @@ function syncNameSettingsUI() {
 }
 
 const rmIcon = (name, cls = '') => `<span class="material-symbols-outlined${cls ? ` ${cls}` : ''}" aria-hidden="true">${name}</span>`;
-const rmFamily = box => `font-family:&quot;${escAttr(String(box.fontFamily || 'inherit').replace(/["\\]/g, ''))}&quot;`;
+// (the name is the page's: control characters go with the quotes and
+// backslashes — a newline ended the CSS string, and what followed it in a
+// PDF's font name became a declaration of its own, a background fetched from
+// anywhere)
+const rmFamily = box => `font-family:&quot;${escAttr(String(box.fontFamily || 'inherit').replace(/[\u0000-\u001f\u007f"\\]/g, ''))}&quot;`;
 
 const LINK_NOTE = {
   'row-first': 'The bar to the right may hold the rest of this name',
@@ -1636,8 +1766,20 @@ function rmBarTitle(box) {
   return [
     `${box.fontFamily || 'Times New Roman'} ${+(box.sizePt || 12).toFixed(2)} pt${style ? ` ${style}` : ''}`,
     `kerning ${box.kerning ? 'on' : 'off'}`,
-    box.widthFace ? `measured in the page's own face (${box.widthFace})` : 'measured with HarfBuzz',
+    box.widthFace ? `measured in the page's own face (${box.widthFace})`
+      : rmSubstitute(box) ? `measured with HarfBuzz in ${rmShapedName(box)} — ${rmSubstitute(box)}` : 'measured with HarfBuzz',
   ].join(' · ');
+}
+// The face HarfBuzz measured with, where it stands in for the bar's own
+// (and no page face measured instead): why, or null.
+const rmShapedName = box => `${box.shapedFace.family}${box.shapedFace.style !== 'regular' ? ` ${box.shapedFace.style.replace('bolditalic', 'bold italic')}` : ''}`;
+function rmSubstitute(box) {
+  const f = box.shapedFace;
+  if (!f?.substitute || box.widthFace) return null;
+  const asked = box.fontFamily || 'the bar\'s face';
+  return f.family && f.family.toLowerCase() === String(asked).toLowerCase()
+    ? `${asked} has no ${[box.bold && 'bold', box.italic && 'italic'].filter(Boolean).join(' ') || 'such'} face installed`
+    : `${asked} is not installed`;
 }
 
 // The tolerance in force — not the wider field a loose list falls back to,
@@ -1652,7 +1794,7 @@ function rmTolChip(box) {
   const ink = ['left', 'right'].filter(s => ri?.[s]?.kind === 'ink');
   const margin = ['left', 'right'].filter(s => ri?.margin?.[s]);
   const why = ['Edges from the raster: the Tolerance in Settings applies.'];
-  if (range.under > range.over) why.push(`A name may be up to ${+range.under.toFixed(1)} px narrower: an edge is the detector's, and a redactor draws the box with room to spare.`);
+  if (range.under > range.over && Number.isFinite(range.under)) why.push(`A name may be up to ${+range.under.toFixed(1)} px narrower: an edge is the detector's, and a redactor draws the box with room to spare.`);
   if (ink.length) why.push(`The bar ends at its black ink on the ${ink.join(' and ')}: the nearest word there is further off than a space.`);
   if (margin.length) why.push(`The ink reaches the text column's ${margin.join(' and ')} edge: the name may end anywhere before it.`);
   const note = [ink.length ? `ink ${ink.join(' + ')}` : '', margin.length ? `${margin.join(' + ')} margin` : ''].filter(Boolean).join(' · ');
@@ -1736,6 +1878,7 @@ function rmRenderBar() {
   const head = `<div class="rm-bar-head">
       <span class="rm-bar-w" title="${escAttr(rmBarTitle(box))}">${box.w.toFixed(2)} px</span>
       ${rmTolChip(box)}
+      ${rmSubstitute(box) ? `<span class="rm-chip is-warn" title="${escAttr(`${rmSubstitute(box)}: the names are measured in ${rmShapedName(box)}, which may be wider or narrower.`)}">≈ ${escAttr(rmShapedName(box))}</span>` : ''}
       ${box.uppercase ? `<span class="rm-chip is-warn" title="Settings → Letter case applies on top of the format. Set it to “As typed” to let the format decide.">${RM_CASE_CHIP[caseValue(box.uppercase)] || 'Letter case'}</span>` : ''}
       ${entries.length > 1 ? `<span class="rm-bar-n" title="Several names can share one width. Click one to show it on the bar, or press [ / ] with the bar selected.">${entries.length} ${loose ? 'near' : 'fit'}</span>` : ''}
     </div>`;
@@ -1744,10 +1887,13 @@ function rmRenderBar() {
   let body;
   if (!names.list.length && !(link && pairReadings(box, link).length)) {
     body = '<p class="rm-note">No names to compare. Turn on a list under Names, or a format under Format.</p>';
-  } else if (_measuredKey.get(box) !== names.key && (_measuredKey.has(box) || rmUi.measuring.has(box.id))) {
-    // its names changed since the widths were taken: they are on their way
+  } else if (_measuredKey.get(box) !== names.key) {
+    // not measured yet, or its names changed since the widths were taken:
+    // they are on their way ("No name fits" was said of a bar never measured)
     if (!rmUi.measuring.has(box.id)) rmMeasureSoon(box.id);
     body = '<p class="rm-note">Measuring…</p>';
+  } else if (box.widthError && !Object.keys(box.widths || {}).length) {
+    body = `<p class="rm-note is-warn">No name could be measured (${escAttr(box.widthError)}): the names are not compared.</p>`;
   } else if (!entries.length) {
     body = `<p class="rm-note">No name fits ±${+tol.toFixed(2)} px.</p>`;
   } else {
@@ -1767,7 +1913,8 @@ function rmRenderBar() {
       <summary>${misses.length} near ${misses.length === 1 ? 'miss' : 'misses'}</summary>
       <ol class="rm-fits">${misses.map(e => rmFitRow(box, e, { shown: false, pickable: false, tagged: false, loose })).join('')}</ol>
     </details>` : '';
-  host.innerHTML = `${head}${linkNote}${body}${nearHtml}`;
+  const lacking = box.unshaped ? `<p class="rm-note">${rmNumber(box.unshaped)} ${box.unshaped === 1 ? 'name has' : 'names have'} characters ${escAttr(box.shapedFace?.family || 'the face')} cannot draw: not compared.</p>` : '';
+  host.innerHTML = `${head}${linkNote}${body}${lacking}${nearHtml}`;
   rmInfoReanchor();
 }
 

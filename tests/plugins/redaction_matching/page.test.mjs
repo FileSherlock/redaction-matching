@@ -27,13 +27,14 @@ test('the panel is on the page', { skip }, () => {
 
 test('redaction_matching: api.js keeps its seams and measures plain advances', { skip }, () => {
   const src = fs.readFileSync(path.join(WEB, 'plugins', 'redaction_matching', 'api.js'), 'utf8');
-  for (const gone of ['firstLetter', 'lastLetter', 'fontFamilyToTtf']) assert.ok(!src.includes(gone), `${gone} is back in api.js`);
+  // (handleManualAddBox is text_tool's: the copy here was replaced by it at load and never ran)
+  for (const gone of ['firstLetter', 'lastLetter', 'fontFamilyToTtf', 'handleManualAddBox']) assert.ok(!src.includes(gone), `${gone} is back in api.js`);
   assert.ok(src.includes('ligatures: false'), 'candidate widths are plain advances');
   assert.ok(src.includes('press [ / ]'), 'the panel says how to cycle a bar\'s names');
   for (const name of ['matchesLetterFilter', 'getBoxMatchInfo', 'getBoxMatches', 'setBoxMatch', 'cycleBoxMatch',
                       'effectiveTolerance', 'scoreMatches', 'linkFor', 'pairReadings',
                       // called by name from Recto (text_tool, embedded_text_viewer, ocr_tool, redaction_refiner)
                       'createNewRedaction', 'calculateWidthsForRedaction', 'calculateAllWidths', 'selectRedaction',
-                      'updateAllMatchesView', 'renderCandidates', 'syncNameSettingsUI', 'handleManualAddBox'])
+                      'updateAllMatchesView', 'renderCandidates', 'syncNameSettingsUI'])
     assert.ok(new RegExp(`function ${name}\\(`).test(src), `${name} is defined`);
 });

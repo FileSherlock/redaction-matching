@@ -102,8 +102,8 @@ fields to both at load; it reads `state.currentPage`, `els.viewerContainer`), `G
 **Recto calls these by name** (guarded) — keep names and signatures, or change the caller in
 Recto in the same piece of work:
 - `text_tool/text-tool.js` → `createNewRedaction(page, x, y, w, h, lineId, lineFont,
-  lineSizePt)` (the Add Box tool). Its own `window.handleManualAddBox` loads later and
-  replaces the one in `api.js`.
+  lineSizePt)` (the Add Box tool: its `window.handleManualAddBox` is text_tool's own; `api.js`
+  defines none).
 - `text_tool/drag-resize.js` → `calculateWidthsForRedaction(id)`, `selectRedaction(id)`,
   `updateAllMatchesView(id)`, `renderCandidates()`, `syncNameSettingsUI()`;
   `text_tool/undo.js` → `updateAllMatchesView(id?)`.
